@@ -21,11 +21,11 @@ import time
 try:
     import fairseq
     FAIRSEQ_AVAILABLE = True
-except ImportError:
+    FAIRSEQ_IMPORT_ERROR = None
+except Exception as e:
     FAIRSEQ_AVAILABLE = False
+    FAIRSEQ_IMPORT_ERROR = str(e)
     fairseq = None
-
-import json
 
 # 親ディレクトリの config をインポート
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
@@ -459,6 +459,7 @@ class RVCModel:
         self.model = None
         self.net_g = None
         self.hubert_model = None
+        self.feature_backend = 'mfcc'
         self.rmvpe_model = None  # RMVPEモデル
         self.models_dir = Path(__file__).parent.parent / 'models' / 'rvc'
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -480,7 +481,10 @@ class RVCModel:
         """HuBERTモデルの読み込み - 本実装 (fairseq使用、オプション)"""
         if not FAIRSEQ_AVAILABLE:
             self.logger.warning("fairseq not available, using simplified feature extraction")
-            self.logger.info("Install fairseq for full RVC functionality: pip install fairseq")
+            if FAIRSEQ_IMPORT_ERROR:
+                self.logger.warning(f"fairseq import error: {FAIRSEQ_IMPORT_ERROR}")
+            self.logger.info("Install fairseq for full RVC functionality")
+            self.feature_backend = 'mfcc'
             return None
 
         if not self.hubert_path.exists():
@@ -488,22 +492,65 @@ class RVCModel:
             self.logger.info("Downloading HuBERT model...")
             self.download_pretrained_models()
             if not self.hubert_path.exists():
+                self.feature_backend = 'mfcc'
                 return None
 
         try:
             # fairseqを使ってHuBERTを読み込み
             from fairseq import checkpoint_utils
-            models, saved_cfg, task = checkpoint_utils.load_model_ensemble_and_task(
-                [str(self.hubert_path)],
-                suffix="",
-            )
+            # PyTorch 2.6以降はtorch.load(weights_only=True)が既定となり、
+            # fairseqの古いチェックポイント読込で失敗する場合があるため互換モードを有効化
+            old_env = os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD')
+            os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] = '1'
+            try:
+                models, saved_cfg, task = checkpoint_utils.load_model_ensemble_and_task(
+                    [str(self.hubert_path)],
+                    suffix="",
+                )
+            finally:
+                if old_env is None:
+                    os.environ.pop('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', None)
+                else:
+                    os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] = old_env
+
             self.hubert_model = models[0]
             self.hubert_model.eval().to(self.device)
+            self.feature_backend = 'hubert-fairseq'
             self.logger.info("HuBERT model loaded successfully")
             return self.hubert_model
         except Exception as e:
             self.logger.error(f"Failed to load HuBERT model: {e}")
+            self.feature_backend = 'mfcc'
             return None
+
+    def _extract_hubert_features(self, audio_tensor):
+        """fairseq HuBERT から特徴を抽出（バージョン差分に対応）"""
+        # fairseq のモデル実装差分で API が異なるため複数経路を試す
+        if hasattr(self.hubert_model, 'extract_features'):
+            features = self.hubert_model.extract_features(audio_tensor)
+            if isinstance(features, tuple):
+                features = features[0]
+        else:
+            outputs = self.hubert_model(
+                source=audio_tensor,
+                padding_mask=None,
+                mask=False,
+                features_only=True,
+            )
+            if isinstance(outputs, dict):
+                features = outputs.get('x')
+            else:
+                features = outputs
+
+        if features is None:
+            raise RuntimeError('HuBERT feature extraction returned None')
+
+        if isinstance(features, tuple):
+            features = features[0]
+
+        # [B, T, C] 前提で numpy に変換
+        features = features.squeeze(0).detach().cpu().float().numpy()
+        return features
 
     def load_rmvpe_model(self):
         """RMVPEモデルの読み込み - 本実装"""
@@ -524,6 +571,59 @@ class RVCModel:
             self.logger.error(f"Failed to load RMVPE model: {e}")
             return None
 
+    def _build_model_config_from_checkpoint(self, checkpoint):
+        """RVC checkpoint に埋め込まれた config からローダー用設定を生成"""
+        raw_config = checkpoint.get('config')
+        if not isinstance(raw_config, (list, tuple)) or len(raw_config) < 18:
+            return None
+
+        sample_rate = checkpoint.get('sr', raw_config[17])
+        if isinstance(sample_rate, str) and sample_rate.endswith('k'):
+            sample_rate = int(sample_rate[:-1]) * 1000
+
+        return {
+            'spec_channels': raw_config[0],
+            'segment_size': raw_config[1],
+            'sample_rate': sample_rate,
+            'net_g': {
+                'inter_channels': raw_config[2],
+                'hidden_channels': raw_config[3],
+                'filter_channels': raw_config[4],
+                'n_heads': raw_config[5],
+                'n_layers': raw_config[6],
+                'kernel_size': raw_config[7],
+                'p_dropout': raw_config[8],
+                'resblock': raw_config[9],
+                'resblock_kernel_sizes': raw_config[10],
+                'resblock_dilation_sizes': raw_config[11],
+                'upsample_rates': raw_config[12],
+                'upsample_initial_channel': raw_config[13],
+                'upsample_kernel_sizes': raw_config[14],
+                'spk_embed_dim': raw_config[15],
+                'gin_channels': raw_config[16],
+            },
+        }
+
+    def _filter_compatible_state_dict(self, model, state_dict):
+        """形状一致するキーのみを読み込む"""
+        model_state = model.state_dict()
+        compatible = {}
+        skipped = []
+
+        for key, value in state_dict.items():
+            if key in model_state and model_state[key].shape == value.shape:
+                compatible[key] = value
+            else:
+                skipped.append(key)
+
+        if skipped:
+            self.logger.warning(
+                "Skipped %d incompatible checkpoint keys while loading RVC model",
+                len(skipped),
+            )
+
+        return compatible
+
     def load_rvc_model(self, model_path):
         """RVCモデルの読み込み - 完全実装"""
         try:
@@ -532,16 +632,20 @@ class RVCModel:
                 self.logger.error(f"RVC model not found: {model_path}")
                 return False
 
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+
             # 設定ファイルの読み込み
             config_path = model_path.replace('.pth', '.json')
-            if not os.path.exists(config_path):
-                self.logger.error(f"Config file not found: {config_path}")
-                self.logger.info("Please ensure both .pth and .json files are in the same directory")
-                return False
-
-            # 設定ファイル読み込み
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = self._build_model_config_from_checkpoint(checkpoint)
+                if config is None:
+                    self.logger.error(f"Config file not found: {config_path}")
+                    self.logger.info("Please ensure a .json exists or the checkpoint embeds a valid config")
+                    return False
+                self.logger.info("Using model config embedded in checkpoint")
 
             # net_g設定を取得
             net_g_config = config.get('net_g', {})
@@ -572,7 +676,7 @@ class RVCModel:
             self.net_g = self.net_g.to(self.device)
 
             # state_dictの読み込み
-            state_dict = torch.load(model_path, map_location=self.device)
+            state_dict = checkpoint.get('weight', checkpoint)
 
             # 不要なキーを除去（例: 'epoch', 'global_step'など）
             if 'epoch' in state_dict:
@@ -583,7 +687,8 @@ class RVCModel:
                 del state_dict['lr']
 
             # state_dictの適用
-            self.net_g.load_state_dict(state_dict, strict=False)
+            compatible_state_dict = self._filter_compatible_state_dict(self.net_g, state_dict)
+            self.net_g.load_state_dict(compatible_state_dict, strict=False)
 
             # 評価モードに設定
             self.net_g.eval()
@@ -608,18 +713,26 @@ class RVCModel:
                 if sr != 16000:
                     audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
 
+                audio = np.asarray(audio, dtype=np.float32)
+
                 # 音声をテンソルに変換
                 audio_tensor = torch.from_numpy(audio).unsqueeze(0).to(self.device)
 
+                # 振幅を正規化（極端な入力での不安定化を回避）
+                peak = torch.max(torch.abs(audio_tensor))
+                if peak > 0:
+                    audio_tensor = audio_tensor / peak
+
                 # HuBERTで特徴抽出
                 with torch.no_grad():
-                    features = self.hubert_model.extract_features(audio_tensor)[0]
-                    features = features.squeeze(0).cpu().numpy()
+                    features = self._extract_hubert_features(audio_tensor)
 
+                self.feature_backend = 'hubert-fairseq'
                 return features
 
             except Exception as e:
                 self.logger.error(f"HubERT feature extraction failed: {e}")
+                self.feature_backend = 'mfcc'
 
         # フォールバック: MFCC特徴抽出（高速化）
         self.logger.info("Using fast MFCC feature extraction for real-time processing")
@@ -628,15 +741,28 @@ class RVCModel:
             if sr != 16000:
                 audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
 
+            audio = np.asarray(audio, dtype=np.float32)
+
             # MFCC抽出（パラメータを最適化）
             mfcc = librosa.feature.mfcc(
                 y=audio, sr=16000, n_mfcc=40, n_fft=512, hop_length=256, n_mels=40
             )
+            self.feature_backend = 'mfcc'
             return mfcc.T  # (time, features)形式
 
         except Exception as e:
             self.logger.error(f"MFCC feature extraction failed: {e}")
             return None
+
+    def get_feature_backend_status(self):
+        """現在利用中の特徴抽出バックエンド状態を返す"""
+        return {
+            'fairseq_available': FAIRSEQ_AVAILABLE,
+            'fairseq_import_error': FAIRSEQ_IMPORT_ERROR,
+            'hubert_model_loaded': self.hubert_model is not None,
+            'hubert_checkpoint_exists': self.hubert_path.exists(),
+            'active_backend': self.feature_backend,
+        }
 
     def extract_f0(self, audio, sr):
         """F0（ピッチ）抽出 - RMVPE本実装"""
@@ -724,8 +850,8 @@ class RVCModel:
             # RVCモデルによる推論
             with torch.no_grad():
                 # 特徴量をテンソルに変換
-                feats_tensor = torch.from_numpy(feats).unsqueeze(0).to(self.device)
-                f0_tensor = torch.from_numpy(f0).unsqueeze(0).to(self.device)
+                feats_tensor = torch.from_numpy(feats).float().unsqueeze(0).to(self.device)
+                f0_tensor = torch.from_numpy(f0).float().unsqueeze(0).to(self.device)
 
                 # メルスペクトログラムに変換（簡易）
                 mel_spec = feats_tensor  # HuBERT特徴をメルスペクトログラムとして使用
@@ -748,7 +874,7 @@ class RVCModel:
                             converted_audio = np.tile(converted_audio, len(audio) // len(converted_audio) + 1)[:len(audio)]
 
                         processing_time = time.time() - start_time
-                        self.logger.info(".2f")
+                        self.logger.info(f"RVC conversion completed in {processing_time:.3f}s")
                         return converted_audio
                 except Exception as model_error:
                     self.logger.error(f"RVC model inference failed: {model_error}")

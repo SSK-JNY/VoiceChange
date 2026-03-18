@@ -2,6 +2,7 @@
 """Tkinter UIビュー"""
 import tkinter as tk
 from tkinter import ttk
+import tkinter.font as tkfont
 import config
 
 
@@ -13,6 +14,8 @@ class AudioView:
         self.root.title(config.WINDOW_TITLE)
         self.root.geometry(f"{config.WINDOW_WIDTH}x{config.WINDOW_HEIGHT}")
         self.root.resizable(config.WINDOW_RESIZABLE, config.WINDOW_RESIZABLE)
+
+        self._setup_fonts()
         
         # Controller参照（後で設定される）
         self.controller = None
@@ -49,17 +52,56 @@ class AudioView:
         self.output_devices = output_devices
         
         self._build_ui()
+
+    def _setup_fonts(self):
+        """環境に応じて日本語表示可能なフォントを選択"""
+        available_families = set(tkfont.families(self.root))
+        candidates = [
+            "Noto Sans CJK JP",
+            "Noto Sans JP",
+            "IPAexGothic",
+            "IPAGothic",
+            "TakaoGothic",
+            "VL Gothic",
+            "Yu Gothic UI",
+            "Meiryo",
+            "MS Gothic",
+            "DejaVu Sans",
+            "Arial",
+        ]
+
+        selected = "TkDefaultFont"
+        for family in candidates:
+            if family in available_families:
+                selected = family
+                break
+
+        self.font_title = (selected, 14, "bold")
+        self.font_label = (selected, 11)
+        self.font_value = (selected, 11)
+
+        default_font = tkfont.nametofont("TkDefaultFont")
+        default_font.configure(family=selected, size=11)
+
+        text_font = tkfont.nametofont("TkTextFont")
+        text_font.configure(family=selected, size=11)
+
+        style = ttk.Style(self.root)
+        style.configure("TLabel", font=self.font_label)
+        style.configure("TButton", font=self.font_label)
+        style.configure("TCheckbutton", font=self.font_label)
+        style.configure("TLabelframe.Label", font=self.font_label)
     
     def _build_ui(self):
         """UI構築"""
         # タイトル
         title = ttk.Label(self.root, text=config.WINDOW_TITLE, 
-                          font=config.FONT_TITLE)
+                          font=self.font_title)
         title.pack(pady=10)
         
         # ステータス表示
         status_label = ttk.Label(self.root, textvariable=self.status_var, 
-                                 font=config.FONT_LABEL, foreground="red")
+                                 font=self.font_label, foreground="red")
         status_label.pack(pady=5)
         
         # デバイス選択フレーム
@@ -67,28 +109,56 @@ class AudioView:
         device_frame.pack(fill="x", padx=10, pady=10)
         
         ttk.Label(device_frame, text="入力デバイス:").grid(row=0, column=0, sticky="w")
-        input_combo = ttk.Combobox(
+        input_values = [f"[{i}] {name[:45]}" for i, name in self.input_devices]
+        if not input_values:
+            input_values = ["利用可能な入力デバイスが見つかりません"]
+
+        self.input_combo = ttk.Combobox(
             device_frame, 
             textvariable=self.input_var,
-            values=[f"[{i}] {name[:45]}" for i, name in self.input_devices],
+            values=input_values,
             state="readonly",
             width=50
         )
         if self.input_devices:
-            input_combo.current(0)
-        input_combo.grid(row=0, column=1, sticky="ew", padx=5)
+            self.input_combo.current(0)
+        else:
+            self.input_var.set(input_values[0])
+            self.input_combo.state(["disabled"])
+        self.input_combo.grid(row=0, column=1, sticky="ew", padx=5)
         
         ttk.Label(device_frame, text="出力デバイス:").grid(row=1, column=0, sticky="w")
-        output_combo = ttk.Combobox(
+        output_values = [f"[{i}] {name[:45]}" for i, name in self.output_devices]
+        if not output_values:
+            output_values = ["利用可能な出力デバイスが見つかりません"]
+
+        self.output_combo = ttk.Combobox(
             device_frame,
             textvariable=self.output_var,
-            values=[f"[{i}] {name[:45]}" for i, name in self.output_devices],
+            values=output_values,
             state="readonly",
             width=50
         )
         if self.output_devices:
-            output_combo.current(0)
-        output_combo.grid(row=1, column=1, sticky="ew", padx=5)
+            self.output_combo.current(0)
+        else:
+            self.output_var.set(output_values[0])
+            self.output_combo.state(["disabled"])
+        self.output_combo.grid(row=1, column=1, sticky="ew", padx=5)
+
+        if not self.input_devices or not self.output_devices:
+            warning_text = (
+                "WSL から音声デバイスが検出できていません。"
+                " Windows 側で実行するか、WSL の音声転送設定を確認してください。"
+            )
+            self.device_warning_label = ttk.Label(
+                device_frame,
+                text=warning_text,
+                foreground="darkorange",
+                wraplength=420,
+                justify="left",
+            )
+            self.device_warning_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
         
         device_frame.columnconfigure(1, weight=1)
         
@@ -98,7 +168,7 @@ class AudioView:
         
         # ピッチシフト
         ttk.Label(effect_frame, text="ピッチシフト (セミトーン):").grid(row=0, column=0, sticky="w")
-        self.pitch_label = ttk.Label(effect_frame, text="3", font=config.FONT_VALUE)
+        self.pitch_label = ttk.Label(effect_frame, text="3", font=self.font_value)
         self.pitch_label.grid(row=0, column=2, sticky="e")
         
         pitch_slider = ttk.Scale(
@@ -112,7 +182,7 @@ class AudioView:
         
         # 入力ゲイン
         ttk.Label(effect_frame, text="入力ゲイン (倍率):").grid(row=1, column=0, sticky="w")
-        self.input_gain_label = ttk.Label(effect_frame, text="1.00", font=config.FONT_VALUE)
+        self.input_gain_label = ttk.Label(effect_frame, text="1.00", font=self.font_value)
         self.input_gain_label.grid(row=1, column=2, sticky="e")
         
         input_gain_slider = ttk.Scale(
@@ -126,7 +196,7 @@ class AudioView:
         
         # 出力ゲイン
         ttk.Label(effect_frame, text="出力ゲイン (倍率):").grid(row=2, column=0, sticky="w")
-        self.output_gain_label = ttk.Label(effect_frame, text="1.00", font=config.FONT_VALUE)
+        self.output_gain_label = ttk.Label(effect_frame, text="1.00", font=self.font_value)
         self.output_gain_label.grid(row=2, column=2, sticky="e")
         
         output_gain_slider = ttk.Scale(
@@ -140,7 +210,7 @@ class AudioView:
         
         # フォルマントシフト
         ttk.Label(effect_frame, text="フォルマントシフト (セント相当):").grid(row=3, column=0, sticky="w")
-        self.formant_label = ttk.Label(effect_frame, text="0", font=config.FONT_VALUE)
+        self.formant_label = ttk.Label(effect_frame, text="0", font=self.font_value)
         self.formant_label.grid(row=3, column=2, sticky="e")
         
         formant_slider = ttk.Scale(
@@ -154,7 +224,7 @@ class AudioView:
         
         # ノイズゲート
         ttk.Label(effect_frame, text="ノイズゲート (dB):").grid(row=4, column=0, sticky="w")
-        self.noise_gate_label = ttk.Label(effect_frame, text="-40", font=config.FONT_VALUE)
+        self.noise_gate_label = ttk.Label(effect_frame, text="-40", font=self.font_value)
         self.noise_gate_label.grid(row=4, column=2, sticky="e")
         
         noise_gate_slider = ttk.Scale(
@@ -195,7 +265,7 @@ class AudioView:
 
         # RVCピッチシフト
         ttk.Label(rvc_frame, text="ピッチシフト:").grid(row=3, column=0, sticky="w")
-        self.rvc_pitch_label = ttk.Label(rvc_frame, text="0", font=config.FONT_VALUE)
+        self.rvc_pitch_label = ttk.Label(rvc_frame, text="0", font=self.font_value)
         self.rvc_pitch_label.grid(row=3, column=2, sticky="e")
 
         rvc_pitch_slider = ttk.Scale(
@@ -259,7 +329,7 @@ RVC (Retrieval-based Voice Conversion):
 - 入出力HostAPI一致が必須
 - RVC使用時はGPU推奨
         """
-        info_display = tk.Text(info_frame, height=10, width=55, wrap="word")
+        info_display = tk.Text(info_frame, height=10, width=55, wrap="word", font=self.font_label)
         info_display.insert("1.0", info_text.strip())
         info_display.config(state="disabled")
         info_display.pack()
@@ -313,7 +383,10 @@ RVC (Retrieval-based Voice Conversion):
     
     def enable_start_button(self):
         """開始ボタン有効化"""
-        self.start_button.config(state="normal")
+        if self.input_devices and self.output_devices:
+            self.start_button.config(state="normal")
+        else:
+            self.start_button.config(state="disabled")
     
     def disable_start_button(self):
         """開始ボタン無効化"""
@@ -329,8 +402,10 @@ RVC (Retrieval-based Voice Conversion):
     
     def enable_device_controls(self):
         """デバイス選択有効化"""
-        # Comboboxの状態変更は別途対応（現在は read-only）
-        pass
+        if self.input_devices:
+            self.input_combo.state(["!disabled", "readonly"])
+        if self.output_devices:
+            self.output_combo.state(["!disabled", "readonly"])
     
     def set_controller(self, controller):
         """Controllerを設定（View初期化後に呼び出す）"""

@@ -6,8 +6,16 @@ import os
 import argparse
 import numpy as np
 import soundfile as sf
+import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.models.voice_model import AudioModel
+
+try:
+    from rvc_python.infer import RVCInference
+    RVC_PYTHON_AVAILABLE = True
+except Exception:
+    RVCInference = None
+    RVC_PYTHON_AVAILABLE = False
 
 
 def load_config(config_path):
@@ -22,6 +30,41 @@ def save_config(config_path, config):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
 
+def convert_with_rvc_python(input_path, output_path, model_path, pitch_shift, config):
+    """rvc-python を使った実モデル推論経路"""
+    if not RVC_PYTHON_AVAILABLE:
+        raise RuntimeError("rvc-python is not available in current environment")
+
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu:0'
+    index_path = model_path.replace('.pth', '.index')
+
+    # PyTorch 2.6+ の weights_only 既定値変更に対応
+    old_env = os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD')
+    os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] = '1'
+
+    try:
+        infer = RVCInference(device=device)
+        infer.load_model(
+            model_path,
+            version=config.get('version', 'v2'),
+            index_path=index_path if os.path.exists(index_path) else ''
+        )
+        infer.set_params(
+            f0up_key=int(pitch_shift),
+            f0method=config.get('f0_method', 'rmvpe'),
+            index_rate=float(config.get('index_rate', 0.75)),
+            filter_radius=int(config.get('filter_radius', 3)),
+            rms_mix_rate=float(config.get('rms_mix_rate', 1.0)),
+            protect=float(config.get('protect', 0.33)),
+        )
+        infer.infer_file(input_path, output_path)
+    finally:
+        if old_env is None:
+            os.environ.pop('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', None)
+        else:
+            os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] = old_env
+
+
 def main():
     parser = argparse.ArgumentParser(description='RVC音声変換スクリプト')
     parser.add_argument('--config', '-c', default='rvc_config.json',
@@ -31,6 +74,8 @@ def main():
     parser.add_argument('--model', '-m', help='RVCモデル名 (設定ファイルより優先)')
     parser.add_argument('--pitch', '-p', type=int, help='ピッチシフト (設定ファイルより優先)')
     parser.add_argument('--fast', action='store_true', help='高速モードを使用')
+    parser.add_argument('--backend', choices=['auto', 'legacy', 'rvc-python'], default='auto',
+                       help='変換バックエンド (auto/legacy/rvc-python)')
 
     args = parser.parse_args()
 
@@ -70,6 +115,11 @@ def main():
         print(f"{key}: {value}")
     print()
 
+    selected_backend = args.backend
+    if selected_backend == 'auto':
+        selected_backend = 'rvc-python' if RVC_PYTHON_AVAILABLE else 'legacy'
+    print(f"backend: {selected_backend}")
+
     # 入力ファイルの存在確認
     if not os.path.exists(config['input_file']):
         print(f"入力ファイルが見つかりません: {config['input_file']}")
@@ -102,7 +152,33 @@ def main():
 
     print(f"RVCモデルを設定しました: {config['rvc_model']}")
 
-    # 音声ファイルを読み込む
+    if selected_backend == 'rvc-python':
+        print("実モデル推論 (rvc-python) を実行中...")
+        try:
+            # 出力ディレクトリが存在しない場合は作成
+            output_dir = os.path.dirname(config['output_file'])
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            convert_with_rvc_python(
+                config['input_file'],
+                config['output_file'],
+                model_path,
+                config.get('pitch_shift', 0),
+                config,
+            )
+            print(f"変換完了！出力ファイル: {config['output_file']}")
+
+            config_output_path = os.path.splitext(config['output_file'])[0] + '.json'
+            config['backend'] = selected_backend
+            save_config(config_output_path, config)
+            print(f"設定ファイルを保存しました: {config_output_path}")
+            return 0
+        except Exception as e:
+            print(f"rvc-python変換エラー: {e}")
+            return 1
+
+    # legacy 経路: 既存の簡易RVC変換
     print(f"音声ファイルを読み込み中: {config['input_file']}")
     try:
         audio, sr = sf.read(config['input_file'])
@@ -144,7 +220,6 @@ def main():
         # フォルマント/EQ調整（formant_shiftパラメータがあれば適用）
         formant_shift = config.get('formant_shift', 0)
         if abs(formant_shift) > 0.5:
-            from src.models.voice_model import AudioModel
             temp_model = AudioModel()
             temp_model.samplerate = sr
             temp_model.formant_shift = formant_shift

@@ -21,7 +21,7 @@ import config
 try:
     from .rvc_model import RVCModel
     RVC_AVAILABLE = True
-except ImportError as e:
+except Exception as e:
     RVC_AVAILABLE = False
     print(f"Warning: RVC model not available. Using simplified implementation. Error: {e}")
 
@@ -125,7 +125,17 @@ class AudioModel:
         """RVCモデルを設定"""
         if self.rvc_model and model_path:
             self.rvc_model_path = model_path
-            self.rvc_model.load_rvc_model(model_path)
+            model_loaded = self.rvc_model.load_rvc_model(model_path)
+            if model_loaded:
+                # fairseq + HuBERT を使える場合は先に読み込んで初回遅延を軽減
+                self.rvc_model.load_hubert_model()
+                status = self.rvc_model.get_feature_backend_status()
+                self.logger.info(
+                    "RVC feature backend: %s (fairseq=%s, hubert_ckpt=%s)",
+                    status.get('active_backend'),
+                    status.get('fairseq_available'),
+                    status.get('hubert_checkpoint_exists'),
+                )
 
     def set_rvc_fast_mode(self, enabled):
         """RVC高速モードを設定"""

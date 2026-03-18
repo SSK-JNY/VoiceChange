@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 venv/
+venv310/
 .venv
 env/
 
@@ -51,3 +52,5 @@ Thumbs.db
 src/models/rvc/*.pt
 src/models/rvc/*.pth
 src/models/rvc/*.json
+
+test/*json

@@ -1,131 +1,119 @@
-# RVC音声変換スクリプト
+# RVC音声変換ガイド
 
-このスクリプトを使用すると、Retrieval-based Voice Conversion (RVC) を用いて音声を変換できます。
+`rvc_convert.py` を使って、WAVファイルをRVCモデルで変換するための手順です。
 
-## 準備
+## 現在のバックエンド
 
-1. RVCモデルをダウンロードして `src/models/rvc/` ディレクトリに配置
-2. 変換したい音声ファイルを準備
+- `rvc-python`: 実モデル推論経路（推奨）
+- `legacy`: 既存の互換経路
+- `auto`: `rvc-python` が使える場合は自動選択
+
+## 事前準備
+
+1. 仮想環境（推奨: Python 3.10）
+
+```bash
+python3.10 -m venv venv310
+source venv310/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+pip install rvc-python==0.1.5
+```
+
+2. モデル配置
+
+```text
+src/models/rvc/
+  05 つくよみちゃん公式RVCモデル 弱.pth
+  (任意) 05 つくよみちゃん公式RVCモデル 弱.index
+```
+
+3. 入力音声
+
+- WAV形式を推奨
+- 例: `test/test.wav`
 
 ## 設定ファイル
 
-`rvc_config.json` で変換パラメータを設定できます。または、**WAVファイルと同じディレクトリに同名のJSONファイルを配置**することで、個別の設定ファイルを使用できます。
-
-"output_file": "test_final.wav", // 設定ファイルからの相対パス
+`rvc_config.json` の主な項目:
 
 ```json
 {
-  "input_file": "test/test.wav", // 入力音声ファイル
-  "output_file": "test/output.wav", // 出力音声ファイル
-  "rvc_model": "05 つくよみちゃん公式RVCモデル 弱", // 使用するRVCモデル名
-  "pitch_shift": 0, // ピッチシフト（半音単位、-24～+24）
-  "fast_mode": false, // 高速モードを使用するか
-  "sample_rate": 44100, // サンプルレート
-  "normalize_input": true, // 入力音声を正規化するか
-  "normalize_output": true // 出力音声を正規化するか
-}
-```
-
-### 個別設定ファイル
-
-WAVファイルと同じディレクトリに同名のJSONファイルを配置することで、個別の設定を使用できます：
-
-```
-test/
-├── test.wav      // 入力ファイル
-├── test.json     // 個別設定ファイル
-├── test_final.wav   // 出力ファイル
-└── test_final.json  // 自動保存される変換設定
-```
-
-個別設定ファイルの内容例：
-
-```json
-{
-  "input_file": "test.wav", // 設定ファイルからの相対パス
-  "output_file": "test_output.wav", // 設定ファイルからの相対パス
+  "input_file": "test/test.wav",
+  "output_file": "test/test_female.wav",
   "rvc_model": "05 つくよみちゃん公式RVCモデル 弱",
-  "pitch_shift": 12, // 女性声変換用
-  "fast_mode": false
+  "pitch_shift": 12,
+  "fast_mode": false,
+  "sample_rate": 44100,
+  "normalize_input": true,
+  "normalize_output": true,
+  "f0_method": "rmvpe",
+  "index_rate": 0.75,
+  "protect": 0.33
 }
 ```
 
-## 使用方法
+## 実行方法
 
-### 基本的な使用
-
-```bash
-python rvc_convert.py
-```
-
-### コマンドラインオプション
+### 実モデル推論（推奨）
 
 ```bash
-python rvc_convert.py [オプション]
+./venv310/bin/python rvc_convert.py \
+  -i test/test.wav \
+  -o test/test_female_real.wav \
+  -m "05 つくよみちゃん公式RVCモデル 弱" \
+  -p 12 \
+  --backend rvc-python
 ```
 
-#### オプション
-
-- `-c, --config CONFIG`: 設定ファイルのパス（デフォルト: rvc_config.json）
-- `-i, --input INPUT`: 入力ファイル（設定ファイルより優先）
-- `-o, --output OUTPUT`: 出力ファイル（設定ファイルより優先）
-- `-m, --model MODEL`: RVCモデル名（設定ファイルより優先）
-- `-p, --pitch PITCH`: ピッチシフト（設定ファイルより優先）
-- `--fast`: 高速モードを使用
-
-### 使用例
+### 互換経路で実行
 
 ```bash
-# 基本的な変換
-python rvc_convert.py
-
-# ピッチを+5半音シフト
-python rvc_convert.py --pitch 5 --output output_pitch5.wav
-
-# 高速モードでピッチを-3半音シフト
-python rvc_convert.py --fast --pitch -3 --output output_fast.wav
-
-# 別のモデルを使用
-python rvc_convert.py --model "別のモデル名" --input input.wav --output output.wav
-
-# 女性声変換（男性声から女性声へ）
-python rvc_convert.py --pitch 12 --output female_voice.wav
-
-# さまざまな女性声バリエーション
-python rvc_convert.py --pitch 6 --output female_mild.wav    # 穏やかな女性声
-python rvc_convert.py --pitch 8 --output female_soft.wav    # 柔らかい女性声
-python rvc_convert.py --pitch 12 --output female_high.wav   # 高めの女性声
-
-# 個別設定ファイルを使用
-python rvc_convert.py --config test/test.json
+./venv310/bin/python rvc_convert.py --backend legacy
 ```
 
-## モードの違い
+### 自動選択
 
-### 通常モード（fast_mode: false）
+```bash
+./venv310/bin/python rvc_convert.py --backend auto
+```
 
-- 完全なRVCモデルを使用
-- 高品質な声質変換が可能
-- 処理時間が長い
+## CLIオプション
 
-### 高速モード（fast_mode: true）
+- `-c, --config`: 設定ファイル（デフォルト: `rvc_config.json`）
+- `-i, --input`: 入力WAVパス
+- `-o, --output`: 出力WAVパス
+- `-m, --model`: モデル名（拡張子なし）
+- `-p, --pitch`: ピッチシフト（半音）
+- `--fast`: 高速モード（legacy経路用）
+- `--backend`: `auto | legacy | rvc-python`
 
-- 簡易的なピッチシフト + エフェクトを使用
-- 処理速度が速い
-- 品質は通常モードより劣る
+## 生成ファイル
 
-## 注意事項
+- 変換後のWAV
+- 同名の設定JSON（実行時パラメータを保存）
 
-- 入力音声はWAV形式を推奨
-- RVCモデルファイル（.pth）は `src/models/rvc/` に配置してください
-- 出力ディレクトリは自動的に作成されます
+例:
 
-## 女性声変換のヒント
+```text
+test/
+  test_female_real.wav
+  test_female_real.json
+```
 
-現在の環境では男性声モデルしか利用できませんが、ピッチシフトを使って女性声に近づけることができます：
+## トラブルシューティング
 
-- **+6～+8半音**: 穏やかで自然な女性声
-- **+10～+12半音**: しっかりした女性声
-- **+12半音以上**: 高めの女性声（声質が変わりすぎる可能性あり）
+### `weights_only` 関連エラー
 
-最適なピッチシフト値は、元の声の性別や個性によって異なります。複数の値を試して最適なものを選んでください。
+- PyTorch 2.6+ で発生する既知問題
+- `rvc_convert.py --backend rvc-python` 経路では互換設定を内部で適用済み
+
+### モデルはあるのにJSONがない
+
+- 本リポジトリでは `.pth` 内蔵設定の読み取りに対応
+- ただし、実モデル推論は `rvc-python` 経路の利用を推奨
+
+### WSLで音声デバイスが見えない
+
+- リアルタイムI/OはWindowsネイティブ実行が安定
+- WSLはモデル推論とバッチ変換に使用

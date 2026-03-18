@@ -30,6 +30,10 @@ def main():
         # View に Controller を設定
         view.controller = controller
         view.set_controller(controller)
+
+        if not model.input_devices or not model.output_devices:
+            view.set_status("音声デバイス未検出: WSL の音声設定を確認", "orange")
+            view.disable_start_button()
         
         # ウィンドウ閉じる処理
         root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root, controller))
