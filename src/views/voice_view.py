@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""
-View層: Tkinter UIビュー
-"""
+"""Tkinter UIビュー"""
 import tkinter as tk
 from tkinter import ttk
-import sys
-import os
-
-# 親ディレクトリの app モジュールをインポート
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 import config
 
 
@@ -21,6 +14,9 @@ class AudioView:
         self.root.geometry(f"{config.WINDOW_WIDTH}x{config.WINDOW_HEIGHT}")
         self.root.resizable(config.WINDOW_RESIZABLE, config.WINDOW_RESIZABLE)
         
+        # Controller参照（後で設定される）
+        self.controller = None
+        
         # UI変数
         self.status_var = tk.StringVar(value="停止中")
         self.input_var = tk.StringVar()
@@ -30,6 +26,12 @@ class AudioView:
         self.output_gain_var = tk.DoubleVar(value=config.INITIAL_OUTPUT_GAIN)
         self.formant_var = tk.IntVar(value=config.INITIAL_FORMANT_SHIFT)
         self.noise_gate_var = tk.IntVar(value=config.INITIAL_NOISE_GATE_THRESHOLD)
+
+        # RVC関連変数
+        self.rvc_enabled_var = tk.BooleanVar(value=False)
+        self.rvc_fast_mode_var = tk.BooleanVar(value=False)  # デフォルトで高速モード無効
+        self.rvc_model_var = tk.StringVar()
+        self.rvc_pitch_var = tk.IntVar(value=0)
         
         # ラベル
         self.pitch_label = None
@@ -165,7 +167,61 @@ class AudioView:
         noise_gate_slider.grid(row=4, column=1, sticky="ew", padx=5)
         
         effect_frame.columnconfigure(1, weight=1)
-        
+
+        # RVC設定フレーム
+        rvc_frame = ttk.LabelFrame(self.root, text="RVC設定 (AI音声変換)", padding=10)
+        rvc_frame.pack(fill="x", padx=10, pady=10)
+
+        # RVC有効/無効
+        ttk.Label(rvc_frame, text="RVC有効:").grid(row=0, column=0, sticky="w")
+        rvc_enabled_check = ttk.Checkbutton(rvc_frame, variable=self.rvc_enabled_var)
+        rvc_enabled_check.grid(row=0, column=1, sticky="w", padx=5)
+
+        # RVC高速モード
+        ttk.Label(rvc_frame, text="高速モード:").grid(row=1, column=0, sticky="w")
+        rvc_fast_check = ttk.Checkbutton(rvc_frame, variable=self.rvc_fast_mode_var)
+        rvc_fast_check.grid(row=1, column=1, sticky="w", padx=5)
+
+        # RVCモデル選択
+        ttk.Label(rvc_frame, text="モデル:").grid(row=2, column=0, sticky="w")
+        self.rvc_model_combo = ttk.Combobox(
+            rvc_frame,
+            textvariable=self.rvc_model_var,
+            values=[],  # 動的に設定
+            state="readonly",
+            width=40
+        )
+        self.rvc_model_combo.grid(row=1, column=1, sticky="ew", padx=5)
+
+        # RVCピッチシフト
+        ttk.Label(rvc_frame, text="ピッチシフト:").grid(row=3, column=0, sticky="w")
+        self.rvc_pitch_label = ttk.Label(rvc_frame, text="0", font=config.FONT_VALUE)
+        self.rvc_pitch_label.grid(row=3, column=2, sticky="e")
+
+        rvc_pitch_slider = ttk.Scale(
+            rvc_frame,
+            from_=-24,
+            to=24,
+            orient="horizontal",
+            variable=self.rvc_pitch_var
+        )
+        rvc_pitch_slider.grid(row=3, column=1, sticky="ew", padx=5)
+
+        # RVCモデルダウンロードボタン
+        self.rvc_download_button = ttk.Button(rvc_frame, text="モデルダウンロード")
+        self.rvc_download_button.grid(row=4, column=0, columnspan=3, pady=5)
+
+        # RVC高速モードチェックボックス
+        self.rvc_fast_mode_var = tk.BooleanVar(value=False)
+        self.rvc_fast_mode_check = ttk.Checkbutton(
+            rvc_frame,
+            text="高速モード",
+            variable=self.rvc_fast_mode_var
+        )
+        self.rvc_fast_mode_check.grid(row=5, column=0, columnspan=3, pady=5)
+
+        rvc_frame.columnconfigure(1, weight=1)
+
         # コントロールボタンフレーム
         button_frame = ttk.Frame(self.root)
         button_frame.pack(pady=15)
@@ -193,9 +249,15 @@ MVC アーキテクチャ:
 - フォルマントシフト: -24～+12（音声特性調整）
 - ノイズゲート: -80～-20 dB（ノイズ除去閾値）
 
+RVC (Retrieval-based Voice Conversion):
+- AIによる音声変換
+- 学習済みモデルを使用
+- リアルタイム変換可能
+
 注意：
 - デバイスは開始前に選択
 - 入出力HostAPI一致が必須
+- RVC使用時はGPU推奨
         """
         info_display = tk.Text(info_frame, height=10, width=55, wrap="word")
         info_display.insert("1.0", info_text.strip())
@@ -233,6 +295,16 @@ MVC アーキテクチャ:
     def update_noise_gate_label(self, value):
         """ノイズゲート表示を更新"""
         self.noise_gate_label.config(text=str(int(float(value))))
+
+    def update_rvc_pitch_label(self, value):
+        """RVCピッチシフト表示を更新"""
+        self.rvc_pitch_label.config(text=str(int(value)))
+
+    def update_rvc_models(self, models):
+        """RVCモデル一覧を更新"""
+        self.rvc_model_combo['values'] = models
+        if models:
+            self.rvc_model_combo.current(0)
     
     def set_status(self, status_text, color="red"):
         """ステータス表示を更新"""
@@ -260,6 +332,10 @@ MVC アーキテクチャ:
         # Comboboxの状態変更は別途対応（現在は read-only）
         pass
     
-    def disable_device_controls(self):
-        """デバイス選択無効化"""
-        pass
+    def set_controller(self, controller):
+        """Controllerを設定（View初期化後に呼び出す）"""
+        self.controller = controller
+        
+        # Controller設定後にイベントハンドラを設定
+        if hasattr(self, 'rvc_fast_mode_check'):
+            self.rvc_fast_mode_check.config(command=self.controller.on_rvc_fast_mode_change)

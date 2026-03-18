@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""
-Controller層: MVC連携とイベント処理
-"""
-import sounddevice as sd
-import threading
-import time
-from tkinter import messagebox
+"""MVC連携とイベント処理"""
 
 
 class AudioController:
@@ -23,6 +17,17 @@ class AudioController:
         
         # UI イベントをバインド
         self._bind_events()
+
+        # RVCモデル一覧を初期化
+        self._initialize_rvc_models()
+    
+    def _initialize_rvc_models(self):
+        """RVCモデル一覧を初期化"""
+        try:
+            models = self.model.get_available_rvc_models()
+            self.view.update_rvc_models(models)
+        except Exception as e:
+            print(f"RVC model initialization failed: {e}")
     
     def _bind_events(self):
         """UI イベントをバインド"""
@@ -33,6 +38,12 @@ class AudioController:
         self.view.output_gain_var.trace('w', self._on_output_gain_change)
         self.view.formant_var.trace('w', self._on_formant_change)
         self.view.noise_gate_var.trace('w', self._on_noise_gate_change)
+
+        # RVC関連イベント
+        self.view.rvc_enabled_var.trace('w', self._on_rvc_enabled_change)
+        self.view.rvc_model_var.trace('w', self._on_rvc_model_change)
+        self.view.rvc_pitch_var.trace('w', self._on_rvc_pitch_change)
+        self.view.rvc_download_button.config(command=self._on_rvc_download)
     
     def _on_pitch_change(self, *args):
         """ピッチシフト変更時"""
@@ -63,6 +74,53 @@ class AudioController:
         value = self.view.noise_gate_var.get()
         self.model.set_noise_gate_threshold(value)
         self.view.update_noise_gate_label(value)
+
+    def _on_rvc_enabled_change(self, *args):
+        """RVC有効/無効変更時"""
+        enabled = self.view.rvc_enabled_var.get()
+        print(f"RVC有効化変更: {enabled}")
+        self.model.enable_rvc(enabled)
+        print(f"モデルRVC有効状態: {self.model.rvc_enabled}")
+
+    def _on_rvc_model_change(self, *args):
+        """RVCモデル変更時"""
+        model_name = self.view.rvc_model_var.get()
+        if model_name:
+            # モデルパスを構築（models/rvc/ 配下）
+            import os
+            from pathlib import Path
+            model_path = Path(__file__).parent.parent / 'models' / 'rvc' / f"{model_name}.pth"
+            self.model.set_rvc_model(str(model_path))
+
+    def _on_rvc_pitch_change(self, *args):
+        """RVCピッチシフト変更時"""
+        value = self.view.rvc_pitch_var.get()
+        self.model.set_rvc_pitch_shift(value)
+        self.view.update_rvc_pitch_label(value)
+
+    def _on_rvc_fast_mode_change(self, *args):
+        """RVC高速モード変更時"""
+        enabled = self.view.rvc_fast_mode_var.get()
+        self.model.set_rvc_fast_mode(enabled)
+
+    def on_rvc_fast_mode_change(self):
+        """RVC高速モード変更時 (Checkbutton用)"""
+        enabled = self.view.rvc_fast_mode_var.get()
+        self.model.set_rvc_fast_mode(enabled)
+
+    def _on_rvc_download(self):
+        """RVCモデルダウンロード"""
+        try:
+            self.view.rvc_download_button.config(state="disabled", text="ダウンロード中...")
+            self.model.download_rvc_pretrained_models()
+            # モデル一覧を更新
+            models = self.model.get_available_rvc_models()
+            self.view.update_rvc_models(models)
+            messagebox.showinfo("完了", "RVC事前学習モデルのダウンロードが完了しました")
+        except Exception as e:
+            messagebox.showerror("エラー", f"ダウンロードに失敗しました: {e}")
+        finally:
+            self.view.rvc_download_button.config(state="normal", text="モデルダウンロード")
     
     def start_stream(self):
         """ストリーム開始"""

@@ -9,32 +9,70 @@ import threading
 from scipy import signal
 import sys
 import os
+import time
+import logging
+import librosa
 
 # 親ディレクトリの app モジュールをインポート
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 import config
 
+# RVCモデルをインポート
+try:
+    from .rvc_model import RVCModel
+    RVC_AVAILABLE = True
+except ImportError as e:
+    RVC_AVAILABLE = False
+    print(f"Warning: RVC model not available. Using simplified implementation. Error: {e}")
+
 
 class AudioModel:
     """オーディオモデル - デバイス管理とエフェクト処理"""
-    
+
     def __init__(self):
+        # ロガー設定
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        
+        # コンソールハンドラーがない場合は追加
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        
         self.samplerate = config.SAMPLERATE
         self.blocksize = config.BLOCKSIZE
-        
+
         # パラメータ
         self.pitch_shift = config.INITIAL_PITCH_SHIFT
         self.formant_shift = config.INITIAL_FORMANT_SHIFT
         self.input_gain = config.INITIAL_INPUT_GAIN
         self.output_gain = config.INITIAL_OUTPUT_GAIN
         self.noise_gate_threshold = config.INITIAL_NOISE_GATE_THRESHOLD
-        
+
+        # RVC設定
+        self.rvc_enabled = False
+        self.rvc_model_path = None
+        self.rvc_pitch_shift = 0
+        self.rvc_fast_mode = False  # デフォルトで高速モード無効
+
+        # 処理最適化設定
+        self.rvc_processing_timeout = 0.02  # 20ms以内に処理完了させる（1024サンプル対応）
+        self.last_rvc_processing_time = 0
+
+        # RVCモデル初期化
+        if RVC_AVAILABLE:
+            self.rvc_model = RVCModel()
+        else:
+            self.rvc_model = None
+
         # デバイス情報
         self.devices = sd.query_devices()
         self.input_devices = []
         self.output_devices = []
         self._load_devices()
-        
+
         # Pedalboard
         self.board = None
         self.lock = threading.Lock()
@@ -78,6 +116,85 @@ class AudioModel:
     def set_noise_gate_threshold(self, threshold_db):
         """ノイズゲート閾値を設定（dB, -80～-20）"""
         self.noise_gate_threshold = float(threshold_db)
+
+    def enable_rvc(self, enabled):
+        """RVCを有効/無効化"""
+        self.rvc_enabled = bool(enabled)
+
+    def set_rvc_model(self, model_path):
+        """RVCモデルを設定"""
+        if self.rvc_model and model_path:
+            self.rvc_model_path = model_path
+            self.rvc_model.load_rvc_model(model_path)
+
+    def set_rvc_fast_mode(self, enabled):
+        """RVC高速モードを設定"""
+        self.rvc_fast_mode = enabled
+
+    def set_rvc_pitch_shift(self, pitch_shift):
+        """RVCピッチシフトを設定"""
+        self.rvc_pitch_shift = int(pitch_shift)
+
+    def _apply_rvc_fast_mode(self, audio, sr, pitch_shift):
+        """RVC高速モード - ピッチシフト + 簡易エフェクト"""
+        try:
+            # ピッチシフト適用
+            if abs(pitch_shift) > 0.1:
+                pitch_shifted = librosa.effects.pitch_shift(
+                    audio, sr=sr, n_steps=pitch_shift, bins_per_octave=12
+                )
+            else:
+                pitch_shifted = audio
+            
+            # 簡易的な声質変換（ディストーション + フィルタ）
+            from scipy import signal
+            
+            # 軽いディストーション（声質変化をシミュレート）
+            distorted = np.tanh(pitch_shifted * 2.0) * 0.8
+            
+            # 周波数特性変更
+            if pitch_shift > 0:
+                # 高音化時は高域を少しブースト
+                b, a = signal.butter(1, 3000/(sr/2), btype='high')
+                voice_modified = signal.filtfilt(b, a, distorted)
+                voice_modified = voice_modified * 1.2
+            elif pitch_shift < 0:
+                # 低音化時は低域を少しブースト
+                b, a = signal.butter(1, 500/(sr/2), btype='low')
+                voice_modified = signal.filtfilt(b, a, distorted)
+                voice_modified = voice_modified * 1.3
+            else:
+                voice_modified = distorted
+            
+            return voice_modified
+            
+        except Exception as e:
+            self.logger.error(f"Fast RVC mode failed: {e}")
+            return self._simple_convert(audio, sr, pitch_shift)
+    
+    def _simple_convert(self, audio, sr, pitch_shift):
+        """簡易音声変換（ピッチシフトのみ）"""
+        if abs(pitch_shift) > 0.1:
+            try:
+                converted_audio = librosa.effects.pitch_shift(
+                    audio, sr=sr, n_steps=pitch_shift, bins_per_octave=12
+                )
+                return converted_audio
+            except Exception as e:
+                self.logger.error(f"Simple conversion failed: {e}")
+                return audio
+        return audio
+
+    def get_available_rvc_models(self):
+        """利用可能なRVCモデルの一覧を取得"""
+        if self.rvc_model:
+            return self.rvc_model.get_available_models()
+        return []
+
+    def download_rvc_pretrained_models(self):
+        """RVC事前学習モデルをダウンロード"""
+        if self.rvc_model:
+            self.rvc_model.download_pretrained_models()
     
     def process_audio(self, indata, outdata, frames, time_info, status, mode='normal'):
         """オーディオ処理コールバック
@@ -114,12 +231,46 @@ class AudioModel:
                 else:
                     formant_processed = noise_reduced
                 
-                # Pedalboard エフェクト（PitchShift）を適用
-                if self.board is not None:
-                    effected = self.board(formant_processed.T, self.samplerate)
-                    outdata[:] = effected.T * self.output_gain
+                # エフェクト適用
+                if self.rvc_enabled and self.rvc_model and self.rvc_model_path:
+                    # RVC有効時はRVC変換を使用
+                    try:
+                        # 処理時間が長すぎる場合や高速モードの場合は簡易変換
+                        if self.rvc_fast_mode or self.last_rvc_processing_time > self.rvc_processing_timeout:
+                            # 高速モードまたはタイムアウト時は簡易RVC変換
+                            rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
+                            processed_signal = self._apply_rvc_fast_mode(
+                                rvc_input[:, 0], self.samplerate, self.rvc_pitch_shift
+                            ).reshape(-1, 1)
+                        else:
+                            # 通常のRVC変換
+                            rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
+                            start_time = time.time()
+                            rvc_converted = self.rvc_model.convert_voice(
+                                rvc_input[:, 0],
+                                self.samplerate,
+                                self.rvc_model_path,
+                                self.rvc_pitch_shift
+                            )
+                            self.last_rvc_processing_time = time.time() - start_time
+                            processed_signal = rvc_converted.reshape(-1, 1)
+                    except Exception as e:
+                        print(f"RVC conversion failed: {e}")
+                        # RVC失敗時はPedalboardエフェクトを使用
+                        processed_signal = self._apply_pedalboard_effects(formant_processed)
                 else:
-                    outdata[:] = formant_processed * self.output_gain
+                    # 通常のエフェクト適用
+                    processed_signal = self._apply_pedalboard_effects(formant_processed)
+
+                outdata[:] = processed_signal * self.output_gain
+    
+    def _apply_pedalboard_effects(self, signal_in):
+        """Pedalboardエフェクトを適用"""
+        if self.board is not None:
+            effected = self.board(signal_in.T, self.samplerate)
+            return effected.T
+        else:
+            return signal_in
     
     def _apply_noise_reduction(self, indata):
         """スペクトル領域でのノイズ除去（Spectral Subtraction）"""

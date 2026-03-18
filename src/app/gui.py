@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
-"""
-リアルタイムボイスチェンジャー - Tkinter GUI
-MVC アーキテクチャ
-"""
+"""Tkinter GUIエントリポイント"""
 import tkinter as tk
-import sys
-import os
-
-# 同一ディレクトリの config をインポート
 from . import config
 from ..models import AudioModel
 from ..views import AudioView
@@ -33,6 +26,10 @@ def main():
         print("Controller を初期化中...")
         controller = AudioController(model, view)
         print("Controller 初期化完了")
+        
+        # View に Controller を設定
+        view.controller = controller
+        view.set_controller(controller)
         
         # ウィンドウ閉じる処理
         root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root, controller))

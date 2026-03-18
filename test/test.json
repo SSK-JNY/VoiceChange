@@ -1,0 +1,10 @@
+{
+  "input_file": "test.wav",
+  "output_file": "test_final.wav",
+  "rvc_model": "05 つくよみちゃん公式RVCモデル 弱",
+  "pitch_shift": 10,
+  "fast_mode": false,
+  "sample_rate": 44100,
+  "normalize_input": true,
+  "normalize_output": true
+}

@@ -5,7 +5,7 @@
 
 # オーディオパラメータ
 SAMPLERATE = 44100  # Hz
-BLOCKSIZE = 4096    # サンプル数
+BLOCKSIZE = 1024    # サンプル数（途切れ対策でさらに小さく）
 
 # 初期値
 INITIAL_PITCH_SHIFT = 3       # セミトーン
