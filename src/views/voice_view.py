@@ -27,6 +27,14 @@ class AudioView:
         self.status_var = tk.StringVar(value="停止中")
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
+        self.blocksize_var = tk.StringVar(value=str(self.gui_settings.blocksize))
+        self.rvc_timeout_var = tk.StringVar(value=f"{self.gui_settings.rvc_processing_timeout_sec:.2f}")
+        self.fast_rpc_every_var = tk.StringVar(value=str(self.gui_settings.fast_mode_rpc_every_n_chunks))
+        self.fast_rpc_timeout_var = tk.StringVar(value=f"{self.gui_settings.fast_mode_rpc_timeout_sec:.2f}")
+        self.fast_rpc_bootstrap_timeout_var = tk.StringVar(value=f"{self.gui_settings.fast_mode_rpc_bootstrap_timeout_sec:.2f}")
+        self.fast_local_mix_var = tk.StringVar(value=f"{self.gui_settings.fast_mode_local_mix:.2f}")
+        self.stream_in_buf_var = tk.StringVar(value=f"{self.gui_settings.stream_input_buffer_seconds:.2f}")
+        self.stream_out_buf_var = tk.StringVar(value=f"{self.gui_settings.stream_output_buffer_seconds:.2f}")
         self.pitch_var = tk.IntVar(value=self.gui_settings.initial_pitch_shift)
         self.input_gain_var = tk.DoubleVar(value=self.gui_settings.initial_input_gain)
         self.output_gain_var = tk.DoubleVar(value=self.gui_settings.initial_output_gain)
@@ -201,6 +209,16 @@ class AudioView:
             self.output_combo.state(["disabled"])
         self.output_combo.grid(row=1, column=1, sticky="ew", padx=5)
 
+        ttk.Label(device_frame, text="ブロックサイズ:").grid(row=2, column=0, sticky="w")
+        self.blocksize_combo = ttk.Combobox(
+            device_frame,
+            textvariable=self.blocksize_var,
+            values=["512", "1024", "2048", "4096", "8192"],
+            state="readonly",
+            width=20,
+        )
+        self.blocksize_combo.grid(row=2, column=1, sticky="w", padx=5)
+
         if not self.input_devices or not self.output_devices:
             warning_text = (
                 "WSL から音声デバイスが検出できていません。"
@@ -213,7 +231,7 @@ class AudioView:
                 wraplength=420,
                 justify="left",
             )
-            self.device_warning_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+            self.device_warning_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
         
         device_frame.columnconfigure(1, weight=1)
         
@@ -320,6 +338,80 @@ class AudioView:
 
         server_frame.columnconfigure(1, weight=1)
 
+        # 速度チューニングフレーム
+        tune_frame = ttk.LabelFrame(scrollable_frame, text="処理速度チューニング", padding=8)
+        tune_frame.pack(fill="x", padx=10, pady=(5, 0))
+
+        ttk.Label(tune_frame, text="RVCタイムアウト(s):").grid(row=0, column=0, sticky="w")
+        self.rvc_timeout_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.rvc_timeout_var,
+            values=["0.08", "0.12", "0.18", "0.25", "0.30", "0.40"],
+            state="readonly",
+            width=10,
+        )
+        self.rvc_timeout_combo.grid(row=0, column=1, sticky="w", padx=5)
+
+        ttk.Label(tune_frame, text="高速RPC間隔(チャンク):").grid(row=0, column=2, sticky="w", padx=(12, 0))
+        self.fast_rpc_every_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.fast_rpc_every_var,
+            values=["1", "2", "3", "4", "5", "6"],
+            state="readonly",
+            width=8,
+        )
+        self.fast_rpc_every_combo.grid(row=0, column=3, sticky="w", padx=5)
+
+        ttk.Label(tune_frame, text="高速RPC timeout(s):").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.fast_rpc_timeout_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.fast_rpc_timeout_var,
+            values=["0.08", "0.10", "0.12", "0.15", "0.18", "0.22", "0.30"],
+            state="readonly",
+            width=10,
+        )
+        self.fast_rpc_timeout_combo.grid(row=1, column=1, sticky="w", padx=5, pady=(4, 0))
+
+        ttk.Label(tune_frame, text="初回RPC timeout(s):").grid(row=1, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        self.fast_rpc_bootstrap_timeout_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.fast_rpc_bootstrap_timeout_var,
+            values=["0.20", "0.30", "0.35", "0.40", "0.45", "0.55", "0.70"],
+            state="readonly",
+            width=8,
+        )
+        self.fast_rpc_bootstrap_timeout_combo.grid(row=1, column=3, sticky="w", padx=5, pady=(4, 0))
+
+        ttk.Label(tune_frame, text="ローカル混合比:").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.fast_local_mix_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.fast_local_mix_var,
+            values=["0.05", "0.10", "0.15", "0.20", "0.25", "0.35", "0.50"],
+            state="readonly",
+            width=10,
+        )
+        self.fast_local_mix_combo.grid(row=2, column=1, sticky="w", padx=5, pady=(4, 0))
+
+        ttk.Label(tune_frame, text="入力バッファ(s):").grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        self.stream_in_buf_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.stream_in_buf_var,
+            values=["0.30", "0.40", "0.50", "0.80", "1.00", "1.50"],
+            state="readonly",
+            width=8,
+        )
+        self.stream_in_buf_combo.grid(row=2, column=3, sticky="w", padx=5, pady=(4, 0))
+
+        ttk.Label(tune_frame, text="出力バッファ(s):").grid(row=3, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        self.stream_out_buf_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.stream_out_buf_var,
+            values=["0.30", "0.40", "0.50", "0.80", "1.00", "1.50"],
+            state="readonly",
+            width=8,
+        )
+        self.stream_out_buf_combo.grid(row=3, column=3, sticky="w", padx=5, pady=(4, 0))
+
         # RVC設定フレーム
         rvc_frame = ttk.LabelFrame(scrollable_frame, text="RVC設定 (AI音声変換)", padding=10)
         rvc_frame.pack(fill="x", padx=10, pady=10)
@@ -331,8 +423,8 @@ class AudioView:
 
         # RVC高速モード
         ttk.Label(rvc_frame, text="高速モード:").grid(row=1, column=0, sticky="w")
-        rvc_fast_check = ttk.Checkbutton(rvc_frame, variable=self.rvc_fast_mode_var)
-        rvc_fast_check.grid(row=1, column=1, sticky="w", padx=5)
+        self.rvc_fast_mode_check = ttk.Checkbutton(rvc_frame, variable=self.rvc_fast_mode_var)
+        self.rvc_fast_mode_check.grid(row=1, column=1, sticky="w", padx=5)
 
         # RVCモデル選択
         ttk.Label(rvc_frame, text="モデル:").grid(row=2, column=0, sticky="w")
@@ -343,7 +435,7 @@ class AudioView:
             state="readonly",
             width=40
         )
-        self.rvc_model_combo.grid(row=1, column=1, sticky="ew", padx=5)
+        self.rvc_model_combo.grid(row=2, column=1, sticky="ew", padx=5)
 
         # RVCピッチシフト
         ttk.Label(rvc_frame, text="ピッチシフト:").grid(row=3, column=0, sticky="w")
@@ -358,15 +450,6 @@ class AudioView:
             variable=self.rvc_pitch_var
         )
         rvc_pitch_slider.grid(row=3, column=1, sticky="ew", padx=5)
-
-        # RVC高速モードチェックボックス
-        self.rvc_fast_mode_var = tk.BooleanVar(value=False)
-        self.rvc_fast_mode_check = ttk.Checkbutton(
-            rvc_frame,
-            text="高速モード",
-            variable=self.rvc_fast_mode_var
-        )
-        self.rvc_fast_mode_check.grid(row=5, column=0, columnspan=3, pady=5)
 
         rvc_frame.columnconfigure(1, weight=1)
 

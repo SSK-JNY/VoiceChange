@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import threading
@@ -37,6 +38,9 @@ except Exception:
     RVC_PYTHON_AVAILABLE = False
 
 
+logger = logging.getLogger(__name__)
+
+
 class InferenceEngine:
     """Stateful model manager and single-shot chunk inference executor."""
 
@@ -47,6 +51,10 @@ class InferenceEngine:
         self.current_settings = InferenceSettings()
         self._inference: Optional[RVCInference] = None
         self._lock = threading.Lock()
+        # 短チャンクでの空出力回避のため、直近履歴を使って最小推論長を確保する
+        self._history_audio = np.zeros(0, dtype=np.float32)
+        self._history_sample_rate = 0
+        self._min_infer_seconds = 0.35
 
     @contextmanager
     def _weights_only_compat(self):
@@ -152,19 +160,40 @@ class InferenceEngine:
         mono_audio = self._decode_payload(payload, spec)
         start_time = time.perf_counter()
 
-        with self._lock, tempfile.TemporaryDirectory(prefix="voicechange_rpc_") as temp_dir:
-            temp_dir_path = Path(temp_dir)
-            input_path = temp_dir_path / "input.wav"
-            output_path = temp_dir_path / "output.wav"
-            sf.write(input_path, mono_audio, spec.sample_rate)
+        # 無音に近いチャンクは推論をスキップしてパススルーする。
+        # rvc-python 側で空配列扱いになるケースを減らし、リアルタイム性を優先する。
+        if len(mono_audio) == 0 or float(np.max(np.abs(mono_audio))) < 1e-6:
+            return self._passthrough_result(sequence, spec, mono_audio, start_time)
 
-            with self._weights_only_compat():
-                infer = self._ensure_backend()
-                infer.infer_file(str(input_path), str(output_path))
+        # 直近履歴と結合して推論入力を安定化する
+        infer_audio = self._build_stable_infer_input(mono_audio, spec.sample_rate)
+        infer_spec = AudioChunkSpec(
+            sample_rate=spec.sample_rate,
+            channels=1,
+            dtype=AudioDType.FLOAT32,
+            frame_count=len(infer_audio),
+        )
 
-            converted_audio, converted_sr = sf.read(output_path, dtype="float32")
+        try:
+            with self._lock, tempfile.TemporaryDirectory(prefix="voicechange_rpc_") as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                input_path = temp_dir_path / "input.wav"
+                output_path = temp_dir_path / "output.wav"
+                sf.write(input_path, infer_audio, infer_spec.sample_rate)
 
-        processed = self._normalize_output(converted_audio, converted_sr, spec)
+                with self._weights_only_compat():
+                    infer = self._ensure_backend()
+                    infer.infer_file(str(input_path), str(output_path))
+
+                converted_audio, converted_sr = sf.read(output_path, dtype="float32")
+                if np.size(converted_audio) == 0:
+                    raise ValueError("empty infer output")
+        except Exception as exc:
+            logger.warning("infer_chunk fallback to passthrough: %s", exc)
+            return self._passthrough_result(sequence, spec, mono_audio, start_time)
+
+        processed_full = self._normalize_output(converted_audio, converted_sr, infer_spec)
+        processed = self._select_output_segment(processed_full, spec.frame_count)
         output_bytes = self._encode_payload(processed, spec)
         processing_ms = (time.perf_counter() - start_time) * 1000.0
 
@@ -174,6 +203,58 @@ class InferenceEngine:
                 audio=spec,
                 processing_ms=processing_ms,
                 fallback=False,
+            ),
+            output_bytes,
+        )
+
+    def _build_stable_infer_input(self, mono_audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """直近履歴を前置して最小推論長を満たす入力を作る。"""
+        min_frames = max(1, int(sample_rate * self._min_infer_seconds))
+
+        if self._history_sample_rate != sample_rate:
+            self._history_audio = np.zeros(0, dtype=np.float32)
+            self._history_sample_rate = sample_rate
+
+        working = np.concatenate([self._history_audio, mono_audio]).astype(np.float32, copy=False)
+        if len(working) < min_frames:
+            pad = min_frames - len(working)
+            if len(working) > 0:
+                working = np.pad(working, (0, pad), mode="edge")
+            else:
+                working = np.zeros(min_frames, dtype=np.float32)
+
+        max_history = max(min_frames * 2, len(mono_audio))
+        source_for_history = np.concatenate([self._history_audio, mono_audio]).astype(np.float32, copy=False)
+        if len(source_for_history) > max_history:
+            self._history_audio = source_for_history[-max_history:]
+        else:
+            self._history_audio = source_for_history
+
+        return np.ascontiguousarray(working, dtype=np.float32)
+
+    def _select_output_segment(self, processed_full: np.ndarray, frame_count: int) -> np.ndarray:
+        """推論結果から要求フレーム数ぶんを末尾から切り出す。"""
+        if len(processed_full) >= frame_count:
+            return processed_full[-frame_count:]
+        return np.pad(processed_full, (0, frame_count - len(processed_full)))
+
+    def _passthrough_result(
+        self,
+        sequence: int,
+        spec: AudioChunkSpec,
+        mono_audio: np.ndarray,
+        start_time: float,
+    ) -> Tuple[InferChunkResultMessage, bytes]:
+        """推論失敗時のパススルー結果を返す。"""
+        processed = self._normalize_output(mono_audio, spec.sample_rate, spec)
+        output_bytes = self._encode_payload(processed, spec)
+        processing_ms = (time.perf_counter() - start_time) * 1000.0
+        return (
+            InferChunkResultMessage(
+                sequence=sequence,
+                audio=spec,
+                processing_ms=processing_ms,
+                fallback=True,
             ),
             output_bytes,
         )

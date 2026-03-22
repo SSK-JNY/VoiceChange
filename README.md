@@ -20,6 +20,7 @@
 - RVC 変換
    - GUI から WSL 推論サーバへ WebSocket RPC で推論要求
    - タイムアウトや推論失敗時はローカル処理へフォールバック
+   - 高速モード時は「間引き RPC + ローカル高速変換」のハイブリッド処理
 - 推論サーバ接続パネル
    - 接続状態表示
    - 接続失敗時の自動リトライ
@@ -146,6 +147,15 @@ WSL bash 版:
 - server_connect_show_error_dialog
    - 接続失敗時ダイアログ表示
    - 既定値: true
+- fast_mode_rpc_every_n_chunks
+   - 高速モード時に RPC を実行する間隔（Nチャンクごと）
+   - 既定値: 3
+- fast_mode_rpc_timeout_sec
+   - 高速モード時の RPC タイムアウト秒
+   - 既定値: 0.12
+- fast_mode_local_mix
+   - 高速モード時のローカル高速変換の混合比 (0.0〜1.0)
+   - 既定値: 0.35
 
 ### フェーズ6検証スクリプト
 

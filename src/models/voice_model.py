@@ -68,6 +68,10 @@ class AudioModel:
         self.rvc_processing_timeout = max(0.05, float(self.gui_settings.rvc_processing_timeout_sec))
         self.last_rvc_processing_time = 0
         self._last_params_sync = 0.0
+        self._fast_chunk_counter = 0
+        self._fast_last_rpc_output: Optional[np.ndarray] = None
+        self._fast_log_last_ts = 0.0
+        self._last_stream_status_log_ts = 0.0
 
         # デバイス情報
         self.devices = sd.query_devices()
@@ -141,7 +145,9 @@ class AudioModel:
 
     def set_rvc_fast_mode(self, enabled):
         """RVC高速モードを設定"""
-        self.rvc_fast_mode = enabled
+        self.rvc_fast_mode = bool(enabled)
+        self._fast_chunk_counter = 0
+        self._fast_last_rpc_output = None
 
     def set_rvc_pitch_shift(self, pitch_shift):
         """RVCピッチシフトを設定"""
@@ -236,7 +242,20 @@ class AudioModel:
             mode: 'normal' (エフェクト), 'passthrough' (エフェクト無し), 'test-tone' (テスト音)
         """
         if status:
-            print('Audio callback status:', status)
+            now = time.time()
+            if now - self._last_stream_status_log_ts > 1.0:
+                self.logger.warning("Audio callback status: %s", status)
+                self._last_stream_status_log_ts = now
+
+            # コールバック過負荷時は重い処理を避け、グリッチ連鎖を抑える。
+            input_overflow = bool(getattr(status, "input_overflow", False))
+            output_underflow = bool(getattr(status, "output_underflow", False))
+            if input_overflow or output_underflow:
+                quick = indata * self.input_gain
+                if mode == 'normal':
+                    quick = self._apply_pedalboard_effects(quick)
+                outdata[:] = quick * self.output_gain
+                return
         
         with self.lock:
             if mode == 'test-tone':
@@ -265,14 +284,14 @@ class AudioModel:
                     formant_processed = noise_reduced
                 
                 # エフェクト適用
-                if self.rvc_enabled and self.rvc_model_name:
+                if self.rvc_enabled and (self.rvc_model_name or self.rvc_fast_mode):
                     rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
                     try:
                         if self.rvc_fast_mode:
-                            processed_signal = self._apply_rvc_fast_mode(
-                                rvc_input[:, 0], self.samplerate, self.rvc_pitch_shift
-                            ).reshape(-1, 1)
+                            processed_signal = self._apply_rvc_hybrid_fast_mode(rvc_input)
                         else:
+                            if not self.rvc_model_name:
+                                raise RuntimeError("rvc model is not selected")
                             start_time = time.time()
                             processed_signal = self._apply_rvc_rpc(rvc_input)
                             self.last_rvc_processing_time = time.time() - start_time
@@ -322,12 +341,76 @@ class AudioModel:
             converted = converted[: len(audio)]
         return converted.reshape(-1, 1)
 
+    def _apply_rvc_hybrid_fast_mode(self, signal_in):
+        """高速モード: ローカル高速変換 + 間引きRPCのハイブリッド。"""
+        audio = np.asarray(signal_in[:, 0], dtype=np.float32)
+        local_fast = self._apply_rvc_fast_mode(audio, self.samplerate, self.rvc_pitch_shift)
+
+        interval = max(1, int(getattr(self.gui_settings, "fast_mode_rpc_every_n_chunks", 3)))
+        mix = float(getattr(self.gui_settings, "fast_mode_local_mix", 0.35))
+        mix = min(1.0, max(0.0, mix))
+        rpc_timeout = max(0.03, float(getattr(self.gui_settings, "fast_mode_rpc_timeout_sec", 0.12)))
+        bootstrap_timeout = max(
+            rpc_timeout,
+            float(getattr(self.gui_settings, "fast_mode_rpc_bootstrap_timeout_sec", 0.35)),
+        )
+
+        self._fast_chunk_counter += 1
+        should_try_rpc = (
+            self._fast_last_rpc_output is None
+            or (self._fast_chunk_counter % interval == 0)
+        )
+
+        if should_try_rpc and self.inference_client is not None and self.inference_client.is_connected:
+            prev_timeout = self.rvc_processing_timeout
+            try:
+                rpc_out = None
+
+                # 1st try: strict timeout for low latency
+                self.rvc_processing_timeout = rpc_timeout
+                try:
+                    rpc_out = self._apply_rvc_rpc(signal_in)
+                except Exception:
+                    rpc_out = None
+
+                # 2nd try (bootstrap): when cache is empty, allow a slightly longer timeout
+                if rpc_out is None and self._fast_last_rpc_output is None and self.rvc_model_name:
+                    self.rvc_processing_timeout = bootstrap_timeout
+                    rpc_out = self._apply_rvc_rpc(signal_in)
+
+                if rpc_out is not None:
+                    self._fast_last_rpc_output = np.asarray(rpc_out[:, 0], dtype=np.float32)
+            except Exception as exc:
+                # 高速モードでは間欠失敗を許容し、過度な warning スパムを抑える
+                now = time.time()
+                if now - self._fast_log_last_ts > 2.0:
+                    self.logger.info("Fast mode RPC skipped/fallback: %s", exc)
+                    self._fast_log_last_ts = now
+            finally:
+                self.rvc_processing_timeout = prev_timeout
+
+        if self._fast_last_rpc_output is not None:
+            cached = self._fit_audio_length(self._fast_last_rpc_output, len(local_fast))
+            blended = (mix * local_fast) + ((1.0 - mix) * cached)
+            return blended.reshape(-1, 1)
+
+        return local_fast.reshape(-1, 1)
+
+    def _fit_audio_length(self, audio: np.ndarray, target_len: int) -> np.ndarray:
+        """長さ不一致時にゼロ詰め/切り詰めで target_len へ整形する。"""
+        if len(audio) == target_len:
+            return audio
+        if len(audio) < target_len:
+            return np.pad(audio, (0, target_len - len(audio)))
+        return audio[:target_len]
+
     def _sync_params_if_needed(self):
         """推論パラメータをサーバへ反映する（間引きあり）。"""
         if self.inference_client is None or not self.inference_client.is_connected:
             return
         now = time.time()
-        if now - self._last_params_sync < 0.25:
+        min_sync_interval = 0.5 if self.rvc_fast_mode else 0.25
+        if now - self._last_params_sync < min_sync_interval:
             return
 
         settings = self.get_current_inference_settings()

@@ -48,6 +48,14 @@ class AudioController:
         self.view.stop_button.config(command=self.stop_stream)
         self.view.passthrough_button.config(command=self.passthrough_stream)
         self.view.pitch_var.trace('w', self._on_pitch_change)
+        self.view.blocksize_var.trace('w', self._on_blocksize_change)
+        self.view.rvc_timeout_var.trace('w', self._on_rvc_timeout_change)
+        self.view.fast_rpc_every_var.trace('w', self._on_fast_rpc_every_change)
+        self.view.fast_rpc_timeout_var.trace('w', self._on_fast_rpc_timeout_change)
+        self.view.fast_rpc_bootstrap_timeout_var.trace('w', self._on_fast_rpc_bootstrap_timeout_change)
+        self.view.fast_local_mix_var.trace('w', self._on_fast_local_mix_change)
+        self.view.stream_in_buf_var.trace('w', self._on_stream_in_buf_change)
+        self.view.stream_out_buf_var.trace('w', self._on_stream_out_buf_change)
         self.view.input_gain_var.trace('w', self._on_input_gain_change)
         self.view.output_gain_var.trace('w', self._on_output_gain_change)
         self.view.formant_var.trace('w', self._on_formant_change)
@@ -55,6 +63,7 @@ class AudioController:
 
         # RVC関連イベント
         self.view.rvc_enabled_var.trace('w', self._on_rvc_enabled_change)
+        self.view.rvc_fast_mode_var.trace('w', self._on_rvc_fast_mode_change)
         self.view.rvc_model_var.trace('w', self._on_rvc_model_change)
         self.view.rvc_pitch_var.trace('w', self._on_rvc_pitch_change)
 
@@ -72,6 +81,96 @@ class AudioController:
         value = self.view.input_gain_var.get()
         self.model.set_input_gain(value)
         self.view.update_input_gain_label(value)
+
+    def _on_blocksize_change(self, *args):
+        """ブロックサイズ変更時"""
+        raw = self.view.blocksize_var.get().strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            return
+        if value <= 0 or value == self.model.blocksize:
+            return
+
+        self.model.blocksize = value
+        self.model.gui_settings.blocksize = value
+
+        if self.is_running:
+            self.view.set_status(
+                f"blocksize={value} は次回開始時に反映されます",
+                "orange",
+            )
+        else:
+            self.view.set_status(f"blocksize を {value} に設定しました", "blue")
+
+    def _on_rvc_timeout_change(self, *args):
+        """RVC処理タイムアウト変更時"""
+        raw = self.view.rvc_timeout_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        value = max(0.03, value)
+        self.model.gui_settings.rvc_processing_timeout_sec = value
+        self.model.rvc_processing_timeout = value
+
+    def _on_fast_rpc_every_change(self, *args):
+        """高速モードRPC間隔変更時"""
+        raw = self.view.fast_rpc_every_var.get().strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            return
+        self.model.gui_settings.fast_mode_rpc_every_n_chunks = max(1, value)
+
+    def _on_fast_rpc_timeout_change(self, *args):
+        """高速モードRPCタイムアウト変更時"""
+        raw = self.view.fast_rpc_timeout_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        self.model.gui_settings.fast_mode_rpc_timeout_sec = max(0.03, value)
+
+    def _on_fast_rpc_bootstrap_timeout_change(self, *args):
+        """高速モード初回RPCタイムアウト変更時"""
+        raw = self.view.fast_rpc_bootstrap_timeout_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        self.model.gui_settings.fast_mode_rpc_bootstrap_timeout_sec = max(0.05, value)
+
+    def _on_fast_local_mix_change(self, *args):
+        """高速モード ローカル混合比変更時"""
+        raw = self.view.fast_local_mix_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        self.model.gui_settings.fast_mode_local_mix = min(1.0, max(0.0, value))
+
+    def _on_stream_in_buf_change(self, *args):
+        """入力バッファ秒数変更時"""
+        raw = self.view.stream_in_buf_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        self.model.gui_settings.stream_input_buffer_seconds = max(0.1, value)
+        if self.is_running:
+            self.view.set_status("入力バッファ設定は次回開始時に反映されます", "orange")
+
+    def _on_stream_out_buf_change(self, *args):
+        """出力バッファ秒数変更時"""
+        raw = self.view.stream_out_buf_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        self.model.gui_settings.stream_output_buffer_seconds = max(0.1, value)
+        if self.is_running:
+            self.view.set_status("出力バッファ設定は次回開始時に反映されます", "orange")
     
     def _on_output_gain_change(self, *args):
         """出力ゲイン変更時"""
@@ -121,11 +220,15 @@ class AudioController:
         """RVC高速モード変更時"""
         enabled = self.view.rvc_fast_mode_var.get()
         self.model.set_rvc_fast_mode(enabled)
+        mode_text = "ON" if enabled else "OFF"
+        self.view.set_status(f"RVC高速モード: {mode_text}", "blue" if enabled else "red")
 
     def on_rvc_fast_mode_change(self):
         """RVC高速モード変更時 (Checkbutton用)"""
         enabled = self.view.rvc_fast_mode_var.get()
         self.model.set_rvc_fast_mode(enabled)
+        mode_text = "ON" if enabled else "OFF"
+        self.view.set_status(f"RVC高速モード: {mode_text}", "blue" if enabled else "red")
     
     def start_stream(self):
         """ストリーム開始"""
@@ -172,6 +275,7 @@ class AudioController:
                 samplerate=self.model.samplerate,
                 blocksize=self.model.blocksize,
                 channels=1,
+                latency="high",
                 callback=audio_callback,
                 device=device_pair
             ):

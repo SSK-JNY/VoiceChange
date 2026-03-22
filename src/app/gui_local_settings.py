@@ -23,6 +23,11 @@ class GuiLocalSettings:
     rvc_processing_timeout_sec: float = 0.18
     stream_input_buffer_seconds: float = 0.5
     stream_output_buffer_seconds: float = 0.5
+    # 高速モードの挙動調整
+    fast_mode_rpc_every_n_chunks: int = 3
+    fast_mode_rpc_timeout_sec: float = 0.12
+    fast_mode_rpc_bootstrap_timeout_sec: float = 0.35
+    fast_mode_local_mix: float = 0.35
 
     # GUIローカル状態
     default_input_device: str = ""
@@ -49,6 +54,10 @@ class GuiLocalSettings:
             rvc_processing_timeout_sec=float(data.get("rvc_processing_timeout_sec", 0.18)),
             stream_input_buffer_seconds=float(data.get("stream_input_buffer_seconds", 0.5)),
             stream_output_buffer_seconds=float(data.get("stream_output_buffer_seconds", 0.5)),
+            fast_mode_rpc_every_n_chunks=int(data.get("fast_mode_rpc_every_n_chunks", 3)),
+            fast_mode_rpc_timeout_sec=float(data.get("fast_mode_rpc_timeout_sec", 0.12)),
+            fast_mode_rpc_bootstrap_timeout_sec=float(data.get("fast_mode_rpc_bootstrap_timeout_sec", 0.35)),
+            fast_mode_local_mix=float(data.get("fast_mode_local_mix", 0.35)),
             default_input_device=str(data.get("default_input_device", "")),
             default_output_device=str(data.get("default_output_device", "")),
             server_url=str(data.get("server_url", "ws://127.0.0.1:8765/ws")),
