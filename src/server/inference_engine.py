@@ -55,6 +55,11 @@ class InferenceEngine:
         self._history_audio = np.zeros(0, dtype=np.float32)
         self._history_sample_rate = 0
         self._min_infer_seconds = 0.35
+        
+        # サーバ側処理時間計測
+        self._inference_times_ms = []
+        self._max_timing_samples = 100
+        self._last_stats_report_ts = time.time()
 
     @contextmanager
     def _weights_only_compat(self):
@@ -157,8 +162,8 @@ class InferenceEngine:
                 f"Invalid payload size: expected {spec.payload_nbytes}, got {len(payload)}"
             )
 
-        mono_audio = self._decode_payload(payload, spec)
         start_time = time.perf_counter()
+        mono_audio = self._decode_payload(payload, spec)
 
         # 無音に近いチャンクは推論をスキップしてパススルーする。
         # rvc-python 側で空配列扱いになるケースを減らし、リアルタイム性を優先する。
@@ -166,7 +171,10 @@ class InferenceEngine:
             return self._passthrough_result(sequence, spec, mono_audio, start_time)
 
         # 直近履歴と結合して推論入力を安定化する
+        t_build_input = time.perf_counter()
         infer_audio = self._build_stable_infer_input(mono_audio, spec.sample_rate)
+        build_input_ms = (time.perf_counter() - t_build_input) * 1000.0
+        
         infer_spec = AudioChunkSpec(
             sample_rate=spec.sample_rate,
             channels=1,
@@ -179,23 +187,52 @@ class InferenceEngine:
                 temp_dir_path = Path(temp_dir)
                 input_path = temp_dir_path / "input.wav"
                 output_path = temp_dir_path / "output.wav"
+                
+                t_fileio_in = time.perf_counter()
                 sf.write(input_path, infer_audio, infer_spec.sample_rate)
+                fileio_in_ms = (time.perf_counter() - t_fileio_in) * 1000.0
 
+                t_infer = time.perf_counter()
                 with self._weights_only_compat():
                     infer = self._ensure_backend()
                     infer.infer_file(str(input_path), str(output_path))
+                infer_ms = (time.perf_counter() - t_infer) * 1000.0
 
+                t_fileio_out = time.perf_counter()
                 converted_audio, converted_sr = sf.read(output_path, dtype="float32")
+                fileio_out_ms = (time.perf_counter() - t_fileio_out) * 1000.0
+                
                 if np.size(converted_audio) == 0:
                     raise ValueError("empty infer output")
         except Exception as exc:
             logger.warning("infer_chunk fallback to passthrough: %s", exc)
             return self._passthrough_result(sequence, spec, mono_audio, start_time)
 
+        t_postproc = time.perf_counter()
         processed_full = self._normalize_output(converted_audio, converted_sr, infer_spec)
         processed = self._select_output_segment(processed_full, spec.frame_count)
         output_bytes = self._encode_payload(processed, spec)
+        postproc_ms = (time.perf_counter() - t_postproc) * 1000.0
+        
         processing_ms = (time.perf_counter() - start_time) * 1000.0
+        
+        # 処理時間を記録（ボトルネック検出用）
+        self._inference_times_ms.append(infer_ms)
+        if len(self._inference_times_ms) > self._max_timing_samples:
+            self._inference_times_ms.pop(0)
+        
+        # 定期的に統計情報をログ出力
+        now = time.perf_counter()
+        if now - self._last_stats_report_ts > 5.0:
+            avg_infer = np.mean(self._inference_times_ms) if self._inference_times_ms else 0.0
+            max_infer = np.max(self._inference_times_ms) if self._inference_times_ms else 0.0
+            logger.info(
+                "Server inference stats: infer_avg=%.2fms/max=%.2fms, "
+                "build_input=%.2fms, fileio_in=%.2fms, fileio_out=%.2fms, postproc=%.2fms",
+                avg_infer, max_infer,
+                build_input_ms, fileio_in_ms, fileio_out_ms, postproc_ms
+            )
+            self._last_stats_report_ts = now
 
         return (
             InferChunkResultMessage(

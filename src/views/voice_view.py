@@ -53,6 +53,9 @@ class AudioView:
         self.server_detail_var = tk.StringVar(value="")
         self.connect_button = None  # _build_ui 内で初期化
         
+        # ボトルネック情報表示用変数
+        self.bottleneck_info_var = tk.StringVar(value="")
+        
         # ラベル
         self.pitch_label = None
         self.input_gain_label = None
@@ -606,3 +609,35 @@ RVC (Retrieval-based Voice Conversion):
         self.server_detail_var.set(text)
         if hasattr(self, "server_detail_label"):
             self.server_detail_label.config(foreground=color)
+    
+    def display_bottleneck_info(self, bottleneck_info: dict) -> str:
+        """ボトルネック情報を文字列にフォーマットして返す（コンソール出力用）
+        
+        Args:
+            bottleneck_info: get_bottleneck_info() の戻り値
+        
+        Returns:
+            フォーマットされたボトルネック情報文字列
+        """
+        expected = bottleneck_info.get("expected_ms", 0)
+        total_avg = bottleneck_info.get("total_avg_ms", 0)
+        is_bottleneck = bottleneck_info.get("is_bottlenecked", False)
+        
+        status = "⚠️  BOTTLENECK" if is_bottleneck else "✓ OK"
+        
+        msg = f"""
+{status} Audio Processing Performance Report:
+  Expected frame time: {expected:.2f}ms
+  
+Processing breakdown (avg ms):
+  Total:       {total_avg:.2f}ms (max: {bottleneck_info.get('total_max_ms', 0):.2f}ms)
+  Input gain:  {bottleneck_info.get('input_gain_ms', 0):.2f}ms
+  Noise reduce: {bottleneck_info.get('noise_reduce_ms', 0):.2f}ms
+  Formant:     {bottleneck_info.get('formant_ms', 0):.2f}ms
+  RVC:         {bottleneck_info.get('rvc_ms', 0):.2f}ms
+  Pedalboard:  {bottleneck_info.get('pedalboard_ms', 0):.2f}ms
+  Output gain: {bottleneck_info.get('output_gain_ms', 0):.2f}ms
+  
+Callback status errors: {bottleneck_info.get('callback_status_count', 0)}
+"""
+        return msg

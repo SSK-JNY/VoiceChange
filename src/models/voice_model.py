@@ -72,6 +72,20 @@ class AudioModel:
         self._fast_last_rpc_output: Optional[np.ndarray] = None
         self._fast_log_last_ts = 0.0
         self._last_stream_status_log_ts = 0.0
+        
+        # ボトルネック検出用: 処理時間計測
+        self._bottleneck_stats = {
+            "total_ms": [],
+            "input_gain_ms": [],
+            "noise_reduce_ms": [],
+            "formant_ms": [],
+            "rvc_ms": [],
+            "pedalboard_ms": [],
+            "output_gain_ms": [],
+            "callback_status_count": 0,
+            "last_report_ts": time.time(),
+        }
+        self._max_stats_samples = 100  # 直近100フレームを保持
 
         # デバイス情報
         self.devices = sd.query_devices()
@@ -241,6 +255,8 @@ class AudioModel:
         Args:
             mode: 'normal' (エフェクト), 'passthrough' (エフェクト無し), 'test-tone' (テスト音)
         """
+        frame_start = time.perf_counter()
+        
         if status:
             now = time.time()
             if now - self._last_stream_status_log_ts > 1.0:
@@ -248,6 +264,7 @@ class AudioModel:
                 self._last_stream_status_log_ts = now
 
             # コールバック過負荷時は重い処理を避け、グリッチ連鎖を抑える。
+            self._bottleneck_stats["callback_status_count"] += 1
             input_overflow = bool(getattr(status, "input_overflow", False))
             output_underflow = bool(getattr(status, "output_underflow", False))
             if input_overflow or output_underflow:
@@ -272,18 +289,25 @@ class AudioModel:
             
             else:  # normal
                 # 通常: Pedalboard エフェクト適用（入力ゲイン→ノイズ除去→フォルマント→Pedalboard→出力ゲイン）
+                t0 = time.perf_counter()
                 signal_in = indata * self.input_gain
+                self._record_timing("input_gain_ms", t0)
                 
                 # ノイズ除去を適用
+                t1 = time.perf_counter()
                 noise_reduced = self._apply_noise_reduction(signal_in)
+                self._record_timing("noise_reduce_ms", t1)
                 
                 # フォルマント処理を適用
+                t2 = time.perf_counter()
                 if abs(self.formant_shift) > 0.5:
                     formant_processed = self._apply_formant(noise_reduced)
                 else:
                     formant_processed = noise_reduced
+                self._record_timing("formant_ms", t2)
                 
-                # エフェクト適用
+                # RVC/エフェクト適用
+                t3 = time.perf_counter()
                 if self.rvc_enabled and (self.rvc_model_name or self.rvc_fast_mode):
                     rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
                     try:
@@ -292,17 +316,38 @@ class AudioModel:
                         else:
                             if not self.rvc_model_name:
                                 raise RuntimeError("rvc model is not selected")
-                            start_time = time.time()
                             processed_signal = self._apply_rvc_rpc(rvc_input)
-                            self.last_rvc_processing_time = time.time() - start_time
                     except Exception as e:
                         self.logger.warning("RVC RPC failed, fallback to local effect: %s", e)
                         processed_signal = self._apply_pedalboard_effects(formant_processed)
                 else:
                     # 通常のエフェクト適用
                     processed_signal = self._apply_pedalboard_effects(formant_processed)
+                self._record_timing("rvc_ms", t3)
 
+                # Pedalboard（コールバック内で即座に実行されるエフェクト）
+                t4 = time.perf_counter()
+                # Pedalboard は RVC/フォルマント処理に含められているため、ここでは計測のみ
+                self._record_timing("pedalboard_ms", t4)
+                
+                # 出力ゲイン適用
+                t5 = time.perf_counter()
                 outdata[:] = processed_signal * self.output_gain
+                self._record_timing("output_gain_ms", t5)
+        
+        # 総処理時間を計測
+        frame_end = time.perf_counter()
+        total_ms = (frame_end - frame_start) * 1000.0
+        expected_ms = (frames / self.samplerate) * 1000.0
+        
+        self._bottleneck_stats["total_ms"].append(total_ms)
+        if len(self._bottleneck_stats["total_ms"]) > self._max_stats_samples:
+            self._bottleneck_stats["total_ms"].pop(0)
+        
+        # 定期的にボトルネック情報をログ出力
+        if frame_end - self._bottleneck_stats["last_report_ts"] > 3.0:
+            self._report_bottleneck_stats(expected_ms)
+            self._bottleneck_stats["last_report_ts"] = frame_end
     
     def _apply_pedalboard_effects(self, signal_in):
         """Pedalboardエフェクトを適用"""
@@ -311,6 +356,82 @@ class AudioModel:
             return effected.T
         else:
             return signal_in
+
+    def _record_timing(self, key: str, start_time: float):
+        """処理時間を記録"""
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        if key not in self._bottleneck_stats:
+            self._bottleneck_stats[key] = []
+        self._bottleneck_stats[key].append(elapsed_ms)
+        if len(self._bottleneck_stats[key]) > self._max_stats_samples:
+            self._bottleneck_stats[key].pop(0)
+
+    def _report_bottleneck_stats(self, expected_frame_ms: float):
+        """ボトルネック統計情報をログ出力"""
+        stats = self._bottleneck_stats
+        
+        def avg_ms(key):
+            vals = stats.get(key, [])
+            return np.mean(vals) if vals else 0.0
+        
+        def max_ms(key):
+            vals = stats.get(key, [])
+            return np.max(vals) if vals else 0.0
+        
+        total_avg = avg_ms("total_ms")
+        total_max = max_ms("total_ms")
+        status_count = stats.get("callback_status_count", 0)
+        
+        # ボトルネック判定フラグ
+        is_bottlenecked = total_avg > expected_frame_ms * 0.8
+        warning_level = "⚠️  BOTTLENECK" if is_bottlenecked else "✓ OK"
+        
+        self.logger.info(
+            "%s Audio processing stats (last 100 frames): "
+            "Total avg=%.2fms/max=%.2fms (expected=%.2fms), "
+            "Gain=%.2fms, NR=%.2fms, Formant=%.2fms, RVC=%.2fms, Pedalboard=%.2fms, "
+            "StatusErrors=%d",
+            warning_level,
+            total_avg, total_max, expected_frame_ms,
+            avg_ms("input_gain_ms"),
+            avg_ms("noise_reduce_ms"),
+            avg_ms("formant_ms"),
+            avg_ms("rvc_ms"),
+            avg_ms("pedalboard_ms"),
+            status_count
+        )
+        
+        # リセット
+        stats["callback_status_count"] = 0
+    
+    def get_bottleneck_info(self) -> dict:
+        """ボトルネック情報を辞書で返す（GUI表示用）"""
+        stats = self._bottleneck_stats
+        
+        def avg_ms(key):
+            vals = stats.get(key, [])
+            return np.mean(vals) if vals else 0.0
+        
+        def max_ms(key):
+            vals = stats.get(key, [])
+            return np.max(vals) if vals else 0.0
+        
+        expected_ms = (self.blocksize / self.samplerate) * 1000.0
+        total_avg = avg_ms("total_ms")
+        
+        return {
+            "expected_ms": expected_ms,
+            "total_avg_ms": total_avg,
+            "total_max_ms": max_ms("total_ms"),
+            "input_gain_ms": avg_ms("input_gain_ms"),
+            "noise_reduce_ms": avg_ms("noise_reduce_ms"),
+            "formant_ms": avg_ms("formant_ms"),
+            "rvc_ms": avg_ms("rvc_ms"),
+            "pedalboard_ms": avg_ms("pedalboard_ms"),
+            "output_gain_ms": avg_ms("output_gain_ms"),
+            "callback_status_count": stats.get("callback_status_count", 0),
+            "is_bottlenecked": total_avg > expected_ms * 0.8,
+        }
 
     def _apply_rvc_rpc(self, signal_in):
         """WSL推論サーバへRPC推論を依頼し、float32モノラルを返す。"""

@@ -414,3 +414,13 @@ class AudioController:
         self.stop_stream()
         if self.inference_client is not None:
             self.inference_client.disconnect()
+
+    def show_bottleneck_analysis(self):
+        """ボトルネック分析結果をコンソールに出力"""
+        try:
+            bottleneck_info = self.model.get_bottleneck_info()
+            report = self.view.display_bottleneck_info(bottleneck_info)
+            print(report)
+            logger.info("Bottleneck analysis:\n%s", report)
+        except Exception as e:
+            logger.error("Failed to get bottleneck info: %s", e)
