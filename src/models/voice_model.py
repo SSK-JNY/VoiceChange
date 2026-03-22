@@ -385,22 +385,20 @@ class AudioModel:
         
         # ボトルネック判定フラグ
         is_bottlenecked = total_avg > expected_frame_ms * 0.8
-        warning_level = "⚠️  BOTTLENECK" if is_bottlenecked else "✓ OK"
+        warning_level = "BOTTLENECK" if is_bottlenecked else "OK"
         
-        self.logger.info(
-            "%s Audio processing stats (last 100 frames): "
-            "Total avg=%.2fms/max=%.2fms (expected=%.2fms), "
-            "Gain=%.2fms, NR=%.2fms, Formant=%.2fms, RVC=%.2fms, Pedalboard=%.2fms, "
-            "StatusErrors=%d",
-            warning_level,
-            total_avg, total_max, expected_frame_ms,
-            avg_ms("input_gain_ms"),
-            avg_ms("noise_reduce_ms"),
-            avg_ms("formant_ms"),
-            avg_ms("rvc_ms"),
-            avg_ms("pedalboard_ms"),
-            status_count
+        msg = (
+            f"[AudioStats/{warning_level}] "
+            f"Total avg={total_avg:.1f}ms max={total_max:.1f}ms (expect={expected_frame_ms:.1f}ms) | "
+            f"Gain={avg_ms('input_gain_ms'):.2f}ms "
+            f"NR={avg_ms('noise_reduce_ms'):.2f}ms "
+            f"Formant={avg_ms('formant_ms'):.2f}ms "
+            f"RVC={avg_ms('rvc_ms'):.2f}ms "
+            f"Pedalboard={avg_ms('pedalboard_ms'):.2f}ms | "
+            f"StatusErrors={status_count}"
         )
+        print(msg)
+        self.logger.info(msg)
         
         # リセット
         stats["callback_status_count"] = 0
