@@ -281,9 +281,16 @@ class AudioModel:
             input_overflow = bool(getattr(status, "input_overflow", False))
             output_underflow = bool(getattr(status, "output_underflow", False))
             if input_overflow or output_underflow:
-                quick = indata * self.input_gain
-                if mode == 'normal':
-                    quick = self._apply_pedalboard_effects(quick)
+                if self.strict_rvc_only and self.rvc_enabled:
+                    if self._last_rvc_success_output is not None:
+                        held = self._fit_audio_length(self._last_rvc_success_output, len(indata))
+                        quick = held.reshape(-1, 1)
+                    else:
+                        quick = np.zeros_like(indata, dtype=np.float32)
+                else:
+                    quick = indata * self.input_gain
+                    if mode == 'normal':
+                        quick = self._apply_pedalboard_effects(quick)
                 delayed = self._apply_output_delay(quick * self.output_gain)
                 outdata[:] = delayed
                 return
@@ -324,20 +331,30 @@ class AudioModel:
                 
                 # RVC/エフェクト適用
                 t3 = time.perf_counter()
-                if self.rvc_enabled and (self.rvc_model_name or self.rvc_fast_mode):
-                    rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
-                    try:
-                        if self.rvc_fast_mode:
-                            processed_signal = self._apply_rvc_hybrid_fast_mode(rvc_input)
-                        else:
-                            if not self.rvc_model_name:
-                                raise RuntimeError("rvc model is not selected")
-                            processed_signal = self._apply_rvc_rpc(rvc_input)
-                    except Exception as e:
-                        self.logger.warning("RVC RPC failed: %s", e)
+                if self.rvc_enabled:
+                    if self.rvc_model_name or self.rvc_fast_mode:
+                        rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
+                        try:
+                            if self.rvc_fast_mode:
+                                processed_signal = self._apply_rvc_hybrid_fast_mode(rvc_input)
+                            else:
+                                if not self.rvc_model_name:
+                                    raise RuntimeError("rvc model is not selected")
+                                processed_signal = self._apply_rvc_rpc(rvc_input)
+                        except Exception as e:
+                            self.logger.warning("RVC RPC failed: %s", e)
+                            if self.strict_rvc_only:
+                                if self._last_rvc_success_output is not None:
+                                    held = self._fit_audio_length(self._last_rvc_success_output, len(rvc_input))
+                                    processed_signal = held.reshape(-1, 1)
+                                else:
+                                    processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
+                            else:
+                                processed_signal = self._apply_pedalboard_effects(formant_processed)
+                    else:
                         if self.strict_rvc_only:
                             if self._last_rvc_success_output is not None:
-                                held = self._fit_audio_length(self._last_rvc_success_output, len(rvc_input))
+                                held = self._fit_audio_length(self._last_rvc_success_output, len(formant_processed))
                                 processed_signal = held.reshape(-1, 1)
                             else:
                                 processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
@@ -561,6 +578,12 @@ class AudioModel:
             cached = self._fit_audio_length(self._fast_last_rpc_output, len(local_fast))
             blended = (mix * local_fast) + ((1.0 - mix) * cached)
             return blended.reshape(-1, 1)
+
+        if self.strict_rvc_only:
+            if self._last_rvc_success_output is not None:
+                held = self._fit_audio_length(self._last_rvc_success_output, len(local_fast))
+                return held.reshape(-1, 1)
+            return np.zeros((len(local_fast), 1), dtype=np.float32)
 
         return local_fast.reshape(-1, 1)
 
