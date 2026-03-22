@@ -1,0 +1,51 @@
+"""Shared protocol layer for Windows client and WSL inference server."""
+
+from .audio_schema import AudioChunkSpec, AudioDType
+from .messages import (
+    ErrorCode,
+    ErrorMessage,
+    HealthMessage,
+    HealthResultMessage,
+    HelloAckMessage,
+    HelloMessage,
+    InferChunkMessage,
+    InferChunkResultMessage,
+    ListModelsMessage,
+    ListModelsResultMessage,
+    LoadModelMessage,
+    LoadModelResultMessage,
+    MessageType,
+    ModelInfo,
+    ProtocolMessage,
+    UpdateParamsMessage,
+    UpdateParamsResultMessage,
+    deserialize_message,
+    serialize_message,
+)
+from .settings_schema import InferenceSettings, SessionSettings
+
+__all__ = [
+    "AudioChunkSpec",
+    "AudioDType",
+    "ErrorCode",
+    "ErrorMessage",
+    "HealthMessage",
+    "HealthResultMessage",
+    "HelloAckMessage",
+    "HelloMessage",
+    "InferChunkMessage",
+    "InferChunkResultMessage",
+    "InferenceSettings",
+    "ListModelsMessage",
+    "ListModelsResultMessage",
+    "LoadModelMessage",
+    "LoadModelResultMessage",
+    "MessageType",
+    "ModelInfo",
+    "ProtocolMessage",
+    "SessionSettings",
+    "UpdateParamsMessage",
+    "UpdateParamsResultMessage",
+    "deserialize_message",
+    "serialize_message",
+]

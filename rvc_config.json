@@ -3,7 +3,6 @@
   "output_file": "test/test_female.wav",
   "rvc_model": "05 つくよみちゃん公式RVCモデル 弱",
   "pitch_shift": 12,
-  "fast_mode": false,
   "sample_rate": 44100,
   "normalize_input": true,
   "normalize_output": true

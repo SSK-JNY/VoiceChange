@@ -2,6 +2,7 @@
 """Tkinter GUIエントリポイント"""
 import tkinter as tk
 from . import config
+from .settings_loader import load_gui_local_settings, load_inference_runtime_settings
 from ..models import AudioModel
 from ..views import AudioView
 from ..controllers import AudioController
@@ -10,16 +11,27 @@ from ..controllers import AudioController
 def main():
     """メイン処理"""
     try:
+        gui_settings = load_gui_local_settings()
+        inference_settings = load_inference_runtime_settings()
+
         # Model 初期化
         print("Model を初期化中...")
-        model = AudioModel()
+        model = AudioModel(
+            gui_settings=gui_settings,
+            inference_settings=inference_settings,
+        )
         print(f"入力デバイス数: {len(model.input_devices)}")
         print(f"出力デバイス数: {len(model.output_devices)}")
         
         # View 初期化
         print("View を初期化中...")
         root = tk.Tk()
-        view = AudioView(root, model.input_devices, model.output_devices)
+        view = AudioView(
+            root,
+            model.input_devices,
+            model.output_devices,
+            gui_settings=gui_settings,
+        )
         print("View 初期化完了")
         
         # Controller 初期化（Model と View を連携）

@@ -1,35 +1,37 @@
 #!/usr/bin/env python3
+"""Model層: オーディオ処理ロジック。
+
+フェーズ4ではローカルRVC推論（RVCModel）を使わず、
+WSL 推論サーバ（InferenceClient）経由の RPC 推論に責務を移す。
 """
-Model層: オーディオ処理ロジック
-"""
-import sounddevice as sd
+
+from pathlib import Path
+import logging
+import os
+import sys
+import threading
+import time
+
+import librosa
 import numpy as np
 from pedalboard import Pedalboard, PitchShift
-import threading
 from scipy import signal
-import sys
-import os
-import time
-import logging
-import librosa
+import sounddevice as sd
 
 # 親ディレクトリの app モジュールをインポート
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 import config
-
-# RVCモデルをインポート
-try:
-    from .rvc_model import RVCModel
-    RVC_AVAILABLE = True
-except Exception as e:
-    RVC_AVAILABLE = False
-    print(f"Warning: RVC model not available. Using simplified implementation. Error: {e}")
+from src.app.gui_local_settings import GuiLocalSettings
+from src.app.inference_runtime_settings import InferenceRuntimeSettings
 
 
 class AudioModel:
     """オーディオモデル - デバイス管理とエフェクト処理"""
 
-    def __init__(self):
+    def __init__(self, gui_settings: GuiLocalSettings | None = None, inference_settings: InferenceRuntimeSettings | None = None):
+        self.gui_settings = gui_settings or GuiLocalSettings()
+        self.inference_runtime_settings = inference_settings or InferenceRuntimeSettings()
+
         # ロガー設定
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
@@ -41,31 +43,28 @@ class AudioModel:
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
         
-        self.samplerate = config.SAMPLERATE
-        self.blocksize = config.BLOCKSIZE
+        self.samplerate = self.gui_settings.samplerate
+        self.blocksize = self.gui_settings.blocksize
 
         # パラメータ
-        self.pitch_shift = config.INITIAL_PITCH_SHIFT
-        self.formant_shift = config.INITIAL_FORMANT_SHIFT
-        self.input_gain = config.INITIAL_INPUT_GAIN
-        self.output_gain = config.INITIAL_OUTPUT_GAIN
-        self.noise_gate_threshold = config.INITIAL_NOISE_GATE_THRESHOLD
+        self.pitch_shift = self.gui_settings.initial_pitch_shift
+        self.formant_shift = self.gui_settings.initial_formant_shift
+        self.input_gain = self.gui_settings.initial_input_gain
+        self.output_gain = self.gui_settings.initial_output_gain
+        self.noise_gate_threshold = self.gui_settings.initial_noise_gate_threshold
 
         # RVC設定
         self.rvc_enabled = False
-        self.rvc_model_path = None
-        self.rvc_pitch_shift = 0
-        self.rvc_fast_mode = False  # デフォルトで高速モード無効
+        self.rvc_model_name = self.inference_runtime_settings.model_name
+        self.rvc_pitch_shift = self.inference_runtime_settings.pitch_shift
+        self.rvc_fast_mode = False
 
-        # 処理最適化設定
-        self.rvc_processing_timeout = 0.02  # 20ms以内に処理完了させる（1024サンプル対応）
+        # RPC推論関連
+        self.inference_client = None
+        self._rvc_sequence = 0
+        self.rvc_processing_timeout = max(0.05, float(self.gui_settings.rvc_processing_timeout_sec))
         self.last_rvc_processing_time = 0
-
-        # RVCモデル初期化
-        if RVC_AVAILABLE:
-            self.rvc_model = RVCModel()
-        else:
-            self.rvc_model = None
+        self._last_params_sync = 0.0
 
         # デバイス情報
         self.devices = sd.query_devices()
@@ -121,21 +120,21 @@ class AudioModel:
         """RVCを有効/無効化"""
         self.rvc_enabled = bool(enabled)
 
+    def set_inference_client(self, client):
+        """推論サーバクライアントを設定する。None で切断扱い。"""
+        self.inference_client = client
+
     def set_rvc_model(self, model_path):
-        """RVCモデルを設定"""
-        if self.rvc_model and model_path:
-            self.rvc_model_path = model_path
-            model_loaded = self.rvc_model.load_rvc_model(model_path)
-            if model_loaded:
-                # fairseq + HuBERT を使える場合は先に読み込んで初回遅延を軽減
-                self.rvc_model.load_hubert_model()
-                status = self.rvc_model.get_feature_backend_status()
-                self.logger.info(
-                    "RVC feature backend: %s (fairseq=%s, hubert_ckpt=%s)",
-                    status.get('active_backend'),
-                    status.get('fairseq_available'),
-                    status.get('hubert_checkpoint_exists'),
-                )
+        """RVCモデル名を設定する。
+
+        引数はパス/モデル名どちらでも受け付け、内部では stem 名で保持する。
+        """
+        if not model_path:
+            self.rvc_model_name = ""
+            self.inference_runtime_settings.model_name = ""
+            return
+        self.rvc_model_name = Path(str(model_path)).stem
+        self.inference_runtime_settings.model_name = self.rvc_model_name
 
     def set_rvc_fast_mode(self, enabled):
         """RVC高速モードを設定"""
@@ -144,6 +143,13 @@ class AudioModel:
     def set_rvc_pitch_shift(self, pitch_shift):
         """RVCピッチシフトを設定"""
         self.rvc_pitch_shift = int(pitch_shift)
+        self.inference_runtime_settings.pitch_shift = self.rvc_pitch_shift
+
+    def get_current_inference_settings(self):
+        """現在の推論設定を protocol 用 InferenceSettings として返す。"""
+        return self.inference_runtime_settings.to_protocol_settings(
+            model_name=self.rvc_model_name
+        )
 
     def _apply_rvc_fast_mode(self, audio, sr, pitch_shift):
         """RVC高速モード - ピッチシフト + 簡易エフェクト"""
@@ -196,15 +202,29 @@ class AudioModel:
         return audio
 
     def get_available_rvc_models(self):
-        """利用可能なRVCモデルの一覧を取得"""
-        if self.rvc_model:
-            return self.rvc_model.get_available_models()
-        return []
+        """利用可能なRVCモデル一覧を返す。
+
+        優先順位:
+        1) サーバ接続中: list_models RPC
+        2) 未接続時: ローカル src/models/rvc/*.pth のファイル名
+        """
+        try:
+            if self.inference_client is not None and self.inference_client.is_connected:
+                return self.inference_client.list_models()
+        except Exception as exc:
+            self.logger.warning("list_models via server failed: %s", exc)
+
+        models_dir = Path(__file__).resolve().parent / "rvc"
+        if not models_dir.exists():
+            return []
+        return sorted([p.stem for p in models_dir.glob("*.pth")])
 
     def download_rvc_pretrained_models(self):
-        """RVC事前学習モデルをダウンロード"""
-        if self.rvc_model:
-            self.rvc_model.download_pretrained_models()
+        """フェーズ4ではローカルダウンロード機能を無効化。"""
+        raise RuntimeError(
+            "フェーズ4では RVC 事前学習モデルのローカルダウンロードは非対応です。"
+            "WSL 側にモデルを配置してサーバ経由で利用してください。"
+        )
     
     def process_audio(self, indata, outdata, frames, time_info, status, mode='normal'):
         """オーディオ処理コールバック
@@ -242,31 +262,19 @@ class AudioModel:
                     formant_processed = noise_reduced
                 
                 # エフェクト適用
-                if self.rvc_enabled and self.rvc_model and self.rvc_model_path:
-                    # RVC有効時はRVC変換を使用
+                if self.rvc_enabled and self.rvc_model_name:
+                    rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
                     try:
-                        # 処理時間が長すぎる場合や高速モードの場合は簡易変換
-                        if self.rvc_fast_mode or self.last_rvc_processing_time > self.rvc_processing_timeout:
-                            # 高速モードまたはタイムアウト時は簡易RVC変換
-                            rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
+                        if self.rvc_fast_mode:
                             processed_signal = self._apply_rvc_fast_mode(
                                 rvc_input[:, 0], self.samplerate, self.rvc_pitch_shift
                             ).reshape(-1, 1)
                         else:
-                            # 通常のRVC変換
-                            rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
                             start_time = time.time()
-                            rvc_converted = self.rvc_model.convert_voice(
-                                rvc_input[:, 0],
-                                self.samplerate,
-                                self.rvc_model_path,
-                                self.rvc_pitch_shift
-                            )
+                            processed_signal = self._apply_rvc_rpc(rvc_input)
                             self.last_rvc_processing_time = time.time() - start_time
-                            processed_signal = rvc_converted.reshape(-1, 1)
                     except Exception as e:
-                        print(f"RVC conversion failed: {e}")
-                        # RVC失敗時はPedalboardエフェクトを使用
+                        self.logger.warning("RVC RPC failed, fallback to local effect: %s", e)
                         processed_signal = self._apply_pedalboard_effects(formant_processed)
                 else:
                     # 通常のエフェクト適用
@@ -281,6 +289,50 @@ class AudioModel:
             return effected.T
         else:
             return signal_in
+
+    def _apply_rvc_rpc(self, signal_in):
+        """WSL推論サーバへRPC推論を依頼し、float32モノラルを返す。"""
+        if self.inference_client is None or not self.inference_client.is_connected:
+            raise RuntimeError("inference client is not connected")
+        if not self.rvc_model_name:
+            raise RuntimeError("rvc model is not selected")
+
+        audio = np.asarray(signal_in[:, 0], dtype=np.float32)
+        self._sync_params_if_needed()
+
+        payload = np.asarray(audio, dtype="<f4").tobytes()
+        self._rvc_sequence += 1
+        result = self.inference_client.infer_chunk(
+            payload,
+            sample_rate=self.samplerate,
+            frame_count=len(audio),
+            sequence=self._rvc_sequence,
+            timeout=self.rvc_processing_timeout,
+        )
+        if result is None:
+            raise RuntimeError("infer_chunk returned no data")
+
+        converted = np.frombuffer(result, dtype="<f4").astype(np.float32, copy=False)
+        if len(converted) < len(audio):
+            converted = np.pad(converted, (0, len(audio) - len(converted)))
+        elif len(converted) > len(audio):
+            converted = converted[: len(audio)]
+        return converted.reshape(-1, 1)
+
+    def _sync_params_if_needed(self):
+        """推論パラメータをサーバへ反映する（間引きあり）。"""
+        if self.inference_client is None or not self.inference_client.is_connected:
+            return
+        now = time.time()
+        if now - self._last_params_sync < 0.25:
+            return
+
+        settings = self.get_current_inference_settings()
+        ok = self.inference_client.update_params(settings)
+        if ok:
+            self._last_params_sync = now
+        else:
+            self.logger.warning("update_params failed")
     
     def _apply_noise_reduction(self, indata):
         """スペクトル領域でのノイズ除去（Spectral Subtraction）"""

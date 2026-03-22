@@ -1,490 +1,243 @@
 # リアルタイムボイスチェンジャー
 
-リアルタイムで声を変換・加工するPythonアプリケーションです。ピッチシフト、フォルマント調整、ノイズ除去、ゲイン制御を備えています。
+リアルタイムで声を変換・加工する Python アプリケーションです。
 
-## 🎯 機能
+現在の推奨構成は以下です。
 
-### エフェクト処理
+- Windows 側: GUI と音声入出力
+- WSL 側: 推論サーバ (RVC / fairseq / HuBERT)
 
-- **ピッチシフト** (-12～+12 セミトーン)
-  - 声の高さを調整
-  - -12: 1オクターブ低下 / +12: 1オクターブ上昇
+## 現在の実装概要
 
-- **フォルマントシフト** (-24～+12 セント相当)
-  - 音声の色合い（音質）を調整
-  - 低周波/高周波の周波数特性を独立制御
-  - 男性音 ↔ 女性音 の変換に対応
+### リアルタイム GUI
 
-- **ノイズ除去** (-80～-20 dB)
-  - Spectral Subtractionアルゴリズムを採用
-  - FFT領域での周波数処理
-  - 背景ノイズを効果的に除去
+- MVC 構成
+- エフェクト処理
+   - ピッチシフト
+   - フォルマント
+   - ノイズ除去
+   - 入出力ゲイン
+- RVC 変換
+   - GUI から WSL 推論サーバへ WebSocket RPC で推論要求
+   - タイムアウトや推論失敗時はローカル処理へフォールバック
+- 推論サーバ接続パネル
+   - 接続状態表示
+   - 接続失敗時の自動リトライ
+   - 失敗時の再試行導線と通知
 
-- **ゲイン制御**
-  - 入力ゲイン (0.1～20.0倍)：マイク入力レベルの調整
-  - 出力ゲイン (0.1～20.0倍)：スピーカー出力レベルの調整
+### オフライン変換
 
-### AI音声変換 (RVC)
+- rvc_convert.py で rvc-python による実モデル推論に対応
 
-- **オフライン変換は実モデル推論に対応**
-   - `rvc_convert.py` で `rvc-python` バックエンドを使うと、実際のRVCモデル推論を実行できます
-   - `--backend rvc-python` で明示指定、`--backend auto` で自動選択
+## 推奨環境
 
-- **リアルタイムGUIは既存経路を維持**
-   - GUIのRVCトグルは既存のリアルタイム経路（legacy）を利用します
-   - 低遅延重視のため、状況により簡易フォールバックが動作します
+- Python 3.10 (venv310)
+- CUDA 対応 GPU (WSL 推論側)
 
-- **fairseq / HuBERT連携を強化**
-   - HuBERT読み込み時の互換処理を追加
-   - 特徴抽出バックエンド状態をログで確認可能
+## セットアップ
 
-### オーディオモード
+依存は以下の 3 ファイルに分割されています。
 
-- **Normal**: 全エフェクト適用（ピッチシフト + フォルマント + ノイズ除去 + RVC）
-- **Passthrough**: エフェクト無し、入出力ゲインのみ
-- **Test-Tone**: テスト音（440Hz）生成用
+- requirements.txt
+   - 共通依存 (Windows / WSL 共通)
+- requirements-windows.txt
+   - Windows GUI / リアルタイム音声 I/O 向け依存
+- requirements-wsl.txt
+   - WSL 推論サーバ / RVC 推論スタック向け依存
 
-## 🏗️ アーキテクチャ
+### Windows PowerShell 版 (GUI 実行環境)
 
-**MVC (Model-View-Controller) パターンを採用**
+`Activate.ps1` が実行ポリシーでブロックされる場合は、同じ PowerShell セッションで以下を先に実行してください。
 
-```
-┌─────────────────────────────────────┐
-│  GUI Entry Point (gui.py)           │
-└─────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────┐
-│  Controller (voice_controller.py)   │
-└─────────────────────────────────────┘
-      ↙           ↘
-┌──────────────┐  ┌────────────────────┐
-│ Model        │  │ View               │
-│(voice_model) │  │(voice_view.py)     │
-└──────────────┘  └────────────────────┘
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
-- **Model層**: オーディオ処理、デバイス管理、エフェクトチェーン
-- **View層**: Tkinter UIウィジェット、表示ロジック
-- **Controller層**: UIイベントハンドリング、Model-View連携
-
-## 📁 ファイル構成
-
-```
-VoiceChange/
-├── src/                         # ソースコード
-│   ├── __init__.py
-│   ├── app/                     # アプリケーションコア
-│   │   ├── __init__.py
-│   │   ├── config.py           # 一元化された設定ファイル
-│   │   ├── gui.py              # GUI版エントリーポイント (MVC初期化)
-│   │   └── main.py             # CLI版ボイスチェンジャー
-│   ├── models/                 # Model層
-│   │   ├── __init__.py
-│   │   └── voice_model.py      # オーディオ処理ロジック
-│   ├── views/                  # View層
-│   │   ├── __init__.py
-│   │   └── voice_view.py       # Tkinter UIウィジェット
-│   ├── controllers/            # Controller層
-│   │   ├── __init__.py
-│   │   └── voice_controller.py # イベント処理
-│   └── utils/                  # ユーティリティ
-│       ├── __init__.py
-│       └── list_devices.py     # デバイス列挙ツール
-├── gui.py                      # GUI版エントリーポイント
-├── main.py                     # CLI版エントリーポイント
-├── list_devices.py             # デバイス列挙エントリーポイント
-├── config.py                   # 設定（旧、参照用）
-├── README.md                   # このファイル
-├── requirements.txt            # 依存パッケージ一覧
-└── .gitignore
+```powershell
+py -3.10 -m venv venv310
+.\venv310\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements-windows.txt
 ```
 
-## ディレクトリ構成の説明
-
-- **src/app/**: アプリケーションの設定とエントリーポイント
-- **src/models/**: Model層（オーディオ処理、エフェクト、デバイス管理）
-- **src/views/**: View層（UI表示、ウィジェット）
-- **src/controllers/**: Controller層（イベントハンドリング、Model-View連携）
-- **src/utils/**: ユーティリティ関数とスクリプト
-
-## 🛠️ インストール
-
-### 推奨環境
-
-- Python 3.10（`venv310` 推奨）
-- Linux/WSLでRVCモデル推論を行う場合はGPUドライバとCUDA環境を事前に確認
-
-### セットアップ
+### WSL bash 版 (推論サーバ実行環境)
 
 ```bash
 python3.10 -m venv venv310
 source venv310/bin/activate
-pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements-wsl.txt
 ```
 
-### 実モデル推論（rvc-python バックエンド）を使う場合
+注意:
+
+- rvc-python の依存により numpy は 1.23.5 系に固定されます
+- 依存衝突を避けるため、推論専用の仮想環境運用を推奨します
+
+## クイックスタート
+
+### 1. WSL 推論サーバを起動
+
+WSL bash 版:
 
 ```bash
-pip install rvc-python==0.1.5
+bash scripts/start_wsl_server.sh
 ```
 
-注記:
-
-- `rvc-python` の依存関係により `numpy` が 1.23.5 系に固定されます
-- 他機能と依存衝突する場合は、RVC専用の仮想環境を分ける運用を推奨します
-
-### WSL利用時の注意
-
-- WSL環境では音声デバイスが列挙できないケースがあります
-- 音声入出力が必要なリアルタイムGUIは Windows ネイティブ実行が安定です
-- WSLは fairseq / モデル推論 / バッチ変換用途として使う構成を推奨します
-
-## 📖 使用方法
-
-### 1. GUI版（推奨）
+または:
 
 ```bash
-python gui.py
+./venv310/bin/python -m src.server.inference_server --host 127.0.0.1 --port 8765
 ```
 
-#### GUI操作手順
+### 2. GUI を起動
 
-1. **デバイス選択** (開始前に選択)
-   - 入力デバイス: マイクを選択
-   - 出力デバイス: スピーカーを選択
-   - **重要**: 入出力デバイスの HostAPI が同じである必要があります
+Windows PowerShell 版:
 
-2. **エフェクト設定**
-   - **ピッチシフト**: -12～+12セミトーン
-   - **入力ゲイン**: マイク入力の音量調整 (0.1倍～20倍)
-   - **出力ゲイン**: 出力音量調整 (0.1倍～20倍)
-   - **フォルマントシフト**: 音質調整 (-24～+12)
-   - **ノイズゲート**: ノイズ除去強度 (-80～-20 dB)
-   - 値を移動させるとリアルタイムで変更が反映されます
-
-3. **RVC設定 (AI音声変換)**
-   - **RVC有効**: AI音声変換のオン/オフ
-   - **モデル**: 使用するRVCモデルを選択
-   - **ピッチシフト**: RVC変換時のピッチ調整 (-24～+24セミトーン)
-   - **モデルダウンロード**: 初回使用時に事前学習モデルをダウンロード
-
-4. **開始/停止**
-   - 「開始」: オーディオストリーム開始
-   - 「停止」: オーディオストリーム停止
-
-#### RVCモデルの準備
-
-RVCを使用するには、以下の手順が必要です：
-
-1. **事前学習モデルのダウンロード**
-   - GUIの「モデルダウンロード」ボタンをクリック
-   - HuBERTとRMVPEモデルが自動ダウンロードされます
-
-2. **学習済みRVCモデルの配置**
-   - 学習済みのRVCモデルファイル (`.pth`) を `src/models/rvc/` フォルダに配置
-   - 対応する設定ファイル (`.json`) も同じフォルダに配置
-   - モデルはHugging FaceやRVCコミュニティから入手可能
-
-#### RVCモデルのファイル構成
-
-```
-src/models/rvc/
-├── モデル名.pth          # RVC学習済みモデル
-├── モデル名.json         # モデル設定ファイル
-├── hubert_base.pt       # HuBERT特徴抽出モデル
-└── rmvpe.pt            # RMVPEピッチ抽出モデル
+```powershell
+.\venv310\Scripts\python.exe gui.py
 ```
 
-#### モデルファイルの入手方法
-
-- **Hugging Face**: https://huggingface.co/models?search=rvc
-- **RVC公式**: https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
-- **コミュニティ**: 各種ボイスチェンジャーコミュニティ
-
-**注意**: モデルファイルは著作権に注意して使用してください。
-
-#### HostAPI確認方法
+WSL bash 版:
 
 ```bash
-python list_devices.py
+./venv310/bin/python gui.py
 ```
 
-出力例：
+### 3. GUI で接続
 
+1. 推論サーバ URL を確認 (既定: ws://127.0.0.1:8765/ws)
+2. 接続ボタンを押す
+3. 状態が接続済みになることを確認
+4. RVC 有効化 + モデル選択
+5. 開始ボタンでストリーム開始
+
+## 設定ファイル
+
+設定は以下の 2 ファイルに分離されています。
+
+- gui_local_settings.json
+   - GUI ローカル設定
+   - 音声デバイス寄り設定
+   - サーバ接続設定
+- inference_settings.json
+   - 推論サーバへ送る設定
+   - model_name, pitch_shift, f0_method, index_rate, protect など
+
+## 実運用向け閾値
+
+### gui_local_settings.json
+
+- rvc_processing_timeout_sec
+   - RVC RPC 1 チャンクあたりのタイムアウト秒
+   - 既定値: 0.18
+- stream_input_buffer_seconds
+   - 入力リングバッファ秒数
+   - 既定値: 0.5
+- stream_output_buffer_seconds
+   - 出力リングバッファ秒数
+   - 既定値: 0.5
+- server_connect_retry_count
+   - サーバ接続時の最大リトライ回数
+   - 既定値: 3
+- server_connect_retry_interval_sec
+   - サーバ接続リトライ間隔秒
+   - 既定値: 1.5
+- server_connect_show_error_dialog
+   - 接続失敗時ダイアログ表示
+   - 既定値: true
+
+### フェーズ6検証スクリプト
+
+scripts/smoke_test_phase6_validation.py は以下の環境変数で閾値上書き可能です。
+
+- PHASE6_ITERATIONS
+- PHASE6_CONNECT_TIMEOUT_SEC
+- PHASE6_LOAD_TIMEOUT_SEC
+- PHASE6_INFER_TIMEOUT_SEC
+- PHASE6_FORCED_TIMEOUT_SEC
+- PHASE6_MEMORY_DELTA_LIMIT_MB
+
+既定のメモリ許容値は 640 MB です。
+
+## RVC モデル準備
+
+- 学習済み .pth を src/models/rvc/ に配置
+- 必要であれば対応する .index も同階層に配置
+
+補足:
+
+- GUI の「モデルダウンロード」ボタンによる事前学習モデル取得は現行構成では非対応です
+- モデルは WSL 側に配置し、サーバ経由で利用してください
+
+## 使用例
+
+### オフライン変換
+
+Windows PowerShell 版:
+
+```powershell
+.\venv310\Scripts\python.exe rvc_convert.py `
+   -i test/test.wav `
+   -o test/test_female_real.wav `
+   -m "05 つくよみちゃん公式RVCモデル 弱" `
+   -p 12
 ```
-[0] Device 0: マイク (in=2, API=MME)
-[1] Device 1: スピーカー (out=2, API=MME)
-```
 
-同じAPI（例: MME）のデバイスペアを選択してください。
-
-### 2. CLI版
+WSL bash 版:
 
 ```bash
-# 基本的な使用
-python main.py -i 0 -o 1
-
-# オプション
-python main.py -i 0 -o 1 -p 5       # ピッチシフト 5セミトーン
-python main.py -i 0 -o 1 -g 2.0     # 出力ゲイン 2倍
-python main.py -i 0 -o 1 -p 3 -g 1.5 -d  # デバッグ出力付き
-```
-
-#### CLI オプション
-
-| オプション | 説明                      | デフォルト |
-| ---------- | ------------------------- | ---------- |
-| `-i INDEX` | 入力デバイスインデックス  | 0          |
-| `-o INDEX` | 出力デバイスインデックス  | 0          |
-| `-p VALUE` | ピッチシフト (セミトーン) | 3          |
-| `-g VALUE` | 出力ゲイン (倍率)         | 1.0        |
-| `-d`       | デバッグ出力有効化        | 無効       |
-| `--help`   | ヘルプ表示                | -          |
-
-### 3. オフラインRVC変換（推奨）
-
-`rvc_convert.py` は2つのバックエンドを選択できます。
-
-- `rvc-python`: 実モデル推論経路
-- `legacy`: 既存実装の変換経路
-- `auto`: `rvc-python` が利用可能なら自動選択
-
-```bash
-# 実モデル推論で女性声に変換
 ./venv310/bin/python rvc_convert.py \
    -i test/test.wav \
    -o test/test_female_real.wav \
    -m "05 つくよみちゃん公式RVCモデル 弱" \
-   -p 12 \
-   --backend rvc-python
+   -p 12
 ```
 
-`rvc_config.json` で利用する主な項目:
+### デバイス確認
 
-- `input_file`
-- `output_file`
-- `rvc_model`
-- `pitch_shift`
-- `fast_mode`
-- `f0_method`（例: `rmvpe`）
-- `index_rate`
-- `protect`
+Windows PowerShell 版:
 
-### 4. RVCモデルテスト
+```powershell
+.\venv310\Scripts\python.exe list_devices.py
+```
 
-RVCモデルの動作確認を行う場合：
+WSL bash 版:
 
 ```bash
-python test_rvc.py
+./venv310/bin/python list_devices.py
 ```
 
-このスクリプトは以下のテストを実行します：
+## 動作確認スクリプト
 
-- RVCモデルの読み込みテスト
-- 利用可能なモデルの列挙
-- 基本的な音声変換テスト（サイン波入力）
-- エラーハンドリングの確認
+主要スモークテスト:
 
-**テスト結果の解釈:**
+- scripts/smoke_test_protocol.py
+- scripts/smoke_test_rpc.py
+- scripts/smoke_test_client.py
+- scripts/smoke_test_phase4_audio_model.py
+- scripts/smoke_test_phase5_settings.py
+- scripts/smoke_test_phase6_validation.py
 
-- ✅ モデル読み込み成功: RVC機能が使用可能
-- ❌ モデルが見つからない: `src/models/rvc/` にモデルファイルを配置してください
-- ❌ 読み込み失敗: モデルファイルと設定ファイルのペアを確認してください
+詳細は scripts/README.md を参照してください。
 
-## ⚙️ 設定ファイル (src/app/config.py)
+## トラブルシューティング
 
-UI上で変更しないパラメータをここで一元管理します。
+### 接続失敗する
 
-### オーディオパラメータ
+1. WSL 推論サーバが起動しているか確認
+2. URL とポートが一致しているか確認
+3. GUI の状態表示で再試行回数と失敗理由を確認
 
-```python
-SAMPLERATE = 44100  # Hz
-BLOCKSIZE = 1024    # サンプル数
-```
+### WSL でデバイスが見えない
 
-### パラメータ初期値
+- WSL 環境では音声デバイス列挙ができない場合があります
+- 音声 I/O が必要なリアルタイム運用は Windows ネイティブ実行を推奨します
 
-```python
-INITIAL_PITCH_SHIFT = 3          # ピッチシフト (セミトーン)
-INITIAL_FORMANT_SHIFT = 0        # フォルマントシフト (セント相当)
-INITIAL_INPUT_GAIN = 1.0         # 入力ゲイン (倍率)
-INITIAL_OUTPUT_GAIN = 1.0        # 出力ゲイン (倍率)
-INITIAL_NOISE_GATE_THRESHOLD = -40  # ノイズゲート (dB)
-```
+## ライセンス
 
-### GUI設定
+MIT
 
-```python
-WINDOW_WIDTH = 500
-WINDOW_HEIGHT = 700
-WINDOW_TITLE = "リアルタイムボイスチェンジャー"
-```
+## 最終更新
 
-## 🔧 高度な使用方法
-
-### 実モデル推論バックエンドの使い分け
-
-| バックエンド | 用途 | 特徴 |
-| --- | --- | --- |
-| `rvc-python` | バッチ変換で高品質を優先 | 実モデル推論を実行 |
-| `legacy` | 既存経路での互換動作確認 | 環境依存が少ない |
-
-### 推奨運用
-
-1. 音声I/Oが必要なリアルタイム処理: Windowsネイティブ
-2. fairseq / モデル推論 / バッチ変換: WSL + `venv310`
-3. 変換品質優先時は `rvc_convert.py --backend rvc-python` を使用
-
-### PyTorch 2.6+ 互換について
-
-- HuBERT/RMVPE読み込みで `weights_only` 関連エラーが出る環境向けに互換処理を追加済みです
-- 変換スクリプトの `rvc-python` 経路では必要な環境変数を内部で設定して実行します
-
-**エラーメッセージ:**
-
-```
-HostAPI不一致: 入力=DirectSound, 出力=MME
-```
-
-**原因**: 入力と出力デバイスが異なる HostAPI を使用している
-
-**解決方法**:
-
-```bash
-python list_devices.py
-```
-
-同じ API を持つデバイスペアを選択してください。例：
-
-- 入力: Device 0 (MME)
-- 出力: Device 1 (MME)
-
-### シナリオ2: 音が聞こえない
-
-**チェックリスト:**
-
-1. デバイスが正しく選択されているか確認
-2. 出力ゲインが 0.1 以上に設定されているか確認
-3. テストモードで動作確認
-   ```bash
-   python main.py -i <入力> -o <出力> --test-tone
-   ```
-4. Windows のシステム音量が適切に設定されているか確認
-5. デバイスが他のアプリケーションで使用中でないか確認
-
-### シナリオ3: ノイズが多い
-
-**対策:**
-
-1. ノイズゲート値を下げる（より強力な除去）
-   - デフォルト: -40 dB → -50 dB に変更
-2. 入力ゲインを下げる（マイク入力を減らす）
-3. マイクを音源に近づける
-4. バックグラウンドノイズが少ない環境での使用
-
-### シナリオ4: エフェクト処理が遅い
-
-**原因**: CPUリソース不足、BLOCKSIZE が小さすぎる
-
-**改善方法**:
-
-`src/app/config.py` の `BLOCKSIZE` を増加
-
-```python
-BLOCKSIZE = 2048  # まずは 2倍程度で調整
-```
-
-## 📊 オーディオ処理フロー
-
-```
-入力信号 (マイク)
-    ↓
-[入力ゲイン適用] × INITIAL_INPUT_GAIN
-    ↓
-[ノイズ除去] Spectral Subtraction (周波数領域)
-    ↓
-[フォルマント処理] FFT × 周波数特性調整 × IFFT
-    ↓
-[Pedalboard] PitchShift エフェクト (低レイテンシー)
-    ↓
-[出力ゲイン適用] × INITIAL_OUTPUT_GAIN
-    ↓
-出力信号 (スピーカー)
-```
-
-## 🔄 更新時の処理順序
-
-Model の `process_audio()` コールバックは以下の順序でエフェクトを適用：
-
-1. **入力ゲイン**: 信号を増幅/減衰
-2. **ノイズ除去**: バックグラウンドノイズを除去
-3. **フォルマント**: 周波数特性を調整
-4. **ピッチシフト**: Pedalboard で音高を変更
-5. **出力ゲイン**: 最終出力レベルを調整
-
-## 🎓 パラメータガイド
-
-### ピッチシフト
-
-| 値  | 説明            |
-| --- | --------------- |
-| -12 | 1オクターブ低下 |
-| -7  | 5度下           |
-| 0   | 変更なし        |
-| +7  | 5度上           |
-| +12 | 1オクターブ上昇 |
-
-### フォルマントシフト
-
-| 値  | 効果       | 用途     |
-| --- | ---------- | -------- |
-| -24 | 低周波強調 | 男性音化 |
-| 0   | 無処理     | 元の音質 |
-| +12 | 高周波強調 | 女性音化 |
-
-### ノイズゲート
-
-| 値  | ノイズ除去強度   | 推奨用途             |
-| --- | ---------------- | -------------------- |
-| -80 | 最大             | 極度のノイズ環境     |
-| -60 | 強               | 工事音などがある環境 |
-| -40 | 中（デフォルト） | 通常の室内環境       |
-| -20 | 弱               | 静かな環境           |
-
-## 💾 デバイス互換性
-
-### テスト済み HostAPI
-
-- [x] Windows WDM-KS
-- [x] Windows WASAPI
-- [x] Windows DirectSound
-- [x] Windows MME
-
-### 推奨設定
-
-**Windows 10/11:**
-
-- 入力: WASAPI （推奨） または MME
-- 出力: WASAPI （推奨） または MME
-
-## 📝 ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。
-
-## 🤝 貢献
-
-バグ報告または機能リクエストは、このリポジトリの Issues で受け付けています。
-
-## 📞 サポート
-
-問題が発生した場合は：
-
-1. トラブルシューティングセクションを確認
-2. `python list_devices.py` でデバイス情報を確認
-3. `python main.py -d` でデバッグ出力を確認
-
----
-
-**最終更新**: 2026年3月18日  
-**バージョン**: 1.1
+2026-03-22

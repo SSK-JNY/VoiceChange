@@ -4,16 +4,18 @@ import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
 import config
+from src.app.gui_local_settings import GuiLocalSettings
 
 
 class AudioView:
     """オーディオGUI - ビュー層"""
     
-    def __init__(self, root, input_devices, output_devices):
+    def __init__(self, root, input_devices, output_devices, gui_settings: GuiLocalSettings | None = None):
+        self.gui_settings = gui_settings or GuiLocalSettings()
         self.root = root
-        self.root.title(config.WINDOW_TITLE)
-        self.root.geometry(f"{config.WINDOW_WIDTH}x{config.WINDOW_HEIGHT}")
-        self.root.resizable(config.WINDOW_RESIZABLE, config.WINDOW_RESIZABLE)
+        self.root.title(self.gui_settings.window_title)
+        self.root.geometry(f"{self.gui_settings.window_width}x{self.gui_settings.window_height}")
+        self.root.resizable(self.gui_settings.window_resizable, self.gui_settings.window_resizable)
 
         self._setup_fonts()
         
@@ -24,17 +26,23 @@ class AudioView:
         self.status_var = tk.StringVar(value="停止中")
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
-        self.pitch_var = tk.IntVar(value=config.INITIAL_PITCH_SHIFT)
-        self.input_gain_var = tk.DoubleVar(value=config.INITIAL_INPUT_GAIN)
-        self.output_gain_var = tk.DoubleVar(value=config.INITIAL_OUTPUT_GAIN)
-        self.formant_var = tk.IntVar(value=config.INITIAL_FORMANT_SHIFT)
-        self.noise_gate_var = tk.IntVar(value=config.INITIAL_NOISE_GATE_THRESHOLD)
+        self.pitch_var = tk.IntVar(value=self.gui_settings.initial_pitch_shift)
+        self.input_gain_var = tk.DoubleVar(value=self.gui_settings.initial_input_gain)
+        self.output_gain_var = tk.DoubleVar(value=self.gui_settings.initial_output_gain)
+        self.formant_var = tk.IntVar(value=self.gui_settings.initial_formant_shift)
+        self.noise_gate_var = tk.IntVar(value=self.gui_settings.initial_noise_gate_threshold)
 
         # RVC関連変数
         self.rvc_enabled_var = tk.BooleanVar(value=False)
         self.rvc_fast_mode_var = tk.BooleanVar(value=False)  # デフォルトで高速モード無効
         self.rvc_model_var = tk.StringVar()
         self.rvc_pitch_var = tk.IntVar(value=0)
+
+        # サーバ接続関連変数
+        self.server_url_var = tk.StringVar(value=self.gui_settings.server_url)
+        self.server_status_var = tk.StringVar(value="未接続")
+        self.server_detail_var = tk.StringVar(value="")
+        self.connect_button = None  # _build_ui 内で初期化
         
         # ラベル
         self.pitch_label = None
@@ -95,7 +103,7 @@ class AudioView:
     def _build_ui(self):
         """UI構築"""
         # タイトル
-        title = ttk.Label(self.root, text=config.WINDOW_TITLE, 
+        title = ttk.Label(self.root, text=self.gui_settings.window_title, 
                           font=self.font_title)
         title.pack(pady=10)
         
@@ -237,6 +245,33 @@ class AudioView:
         noise_gate_slider.grid(row=4, column=1, sticky="ew", padx=5)
         
         effect_frame.columnconfigure(1, weight=1)
+
+        # 推論サーバ接続フレーム
+        server_frame = ttk.LabelFrame(self.root, text="推論サーバ (WSL)", padding=8)
+        server_frame.pack(fill="x", padx=10, pady=(5, 0))
+
+        ttk.Label(server_frame, text="URL:").grid(row=0, column=0, sticky="w")
+        url_entry = ttk.Entry(server_frame, textvariable=self.server_url_var, width=36)
+        url_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        self.connect_button = ttk.Button(server_frame, text="接続")
+        self.connect_button.grid(row=0, column=2, padx=(0, 3))
+
+        ttk.Label(server_frame, text="状態:").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.server_status_label = ttk.Label(
+            server_frame, textvariable=self.server_status_var, foreground="gray"
+        )
+        self.server_status_label.grid(row=1, column=1, columnspan=2, sticky="w", padx=5, pady=(4, 0))
+
+        self.server_detail_label = ttk.Label(
+            server_frame,
+            textvariable=self.server_detail_var,
+            foreground="gray",
+            wraplength=330,
+            justify="left",
+        )
+        self.server_detail_label.grid(row=2, column=1, columnspan=2, sticky="w", padx=5, pady=(2, 0))
+
+        server_frame.columnconfigure(1, weight=1)
 
         # RVC設定フレーム
         rvc_frame = ttk.LabelFrame(self.root, text="RVC設定 (AI音声変換)", padding=10)
@@ -414,3 +449,20 @@ RVC (Retrieval-based Voice Conversion):
         # Controller設定後にイベントハンドラを設定
         if hasattr(self, 'rvc_fast_mode_check'):
             self.rvc_fast_mode_check.config(command=self.controller.on_rvc_fast_mode_change)
+
+    def update_server_status(self, text: str, color: str = "gray") -> None:
+        """サーバ接続状態ラベルを更新する。
+
+        Args:
+            text:  表示するテキスト（例: "接続済み", "未接続"）。
+            color: tkinter 色文字列（例: "green", "red", "gray"）。
+        """
+        self.server_status_var.set(text)
+        if hasattr(self, "server_status_label"):
+            self.server_status_label.config(foreground=color)
+
+    def update_server_detail(self, text: str, color: str = "gray") -> None:
+        """サーバ接続詳細（試行回数、失敗理由など）を更新する。"""
+        self.server_detail_var.set(text)
+        if hasattr(self, "server_detail_label"):
+            self.server_detail_label.config(foreground=color)

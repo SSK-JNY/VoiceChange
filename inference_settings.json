@@ -1,0 +1,10 @@
+{
+    "model_name": "",
+    "pitch_shift": 0,
+    "f0_method": "rmvpe",
+    "index_rate": 0.75,
+    "protect": 0.33,
+    "filter_radius": 3,
+    "rms_mix_rate": 1.0,
+    "backend": "rvc-python"
+}

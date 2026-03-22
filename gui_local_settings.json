@@ -1,0 +1,22 @@
+{
+    "window_width": 500,
+    "window_height": 800,
+    "window_resizable": false,
+    "window_title": "リアルタイムボイスチェンジャー",
+    "samplerate": 44100,
+    "blocksize": 1024,
+    "initial_pitch_shift": 3,
+    "initial_formant_shift": 0,
+    "initial_input_gain": 1.0,
+    "initial_output_gain": 1.0,
+    "initial_noise_gate_threshold": -40,
+    "rvc_processing_timeout_sec": 0.18,
+    "stream_input_buffer_seconds": 0.5,
+    "stream_output_buffer_seconds": 0.5,
+    "default_input_device": "",
+    "default_output_device": "",
+    "server_url": "ws://127.0.0.1:8765/ws",
+    "server_connect_retry_count": 3,
+    "server_connect_retry_interval_sec": 1.5,
+    "server_connect_show_error_dialog": true
+}
