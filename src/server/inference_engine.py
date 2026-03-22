@@ -222,7 +222,7 @@ class InferenceEngine:
             self._inference_times_ms.pop(0)
         
         # 定期的に統計情報をログ出力
-        now = time.perf_counter()
+        now = time.time()
         if now - self._last_stats_report_ts > 5.0:
             avg_infer = np.mean(self._inference_times_ms) if self._inference_times_ms else 0.0
             max_infer = np.max(self._inference_times_ms) if self._inference_times_ms else 0.0

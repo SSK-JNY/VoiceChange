@@ -345,9 +345,10 @@ class AudioModel:
             self._bottleneck_stats["total_ms"].pop(0)
         
         # 定期的にボトルネック情報をログ出力
-        if frame_end - self._bottleneck_stats["last_report_ts"] > 3.0:
+        now = time.time()
+        if now - self._bottleneck_stats["last_report_ts"] > 3.0:
             self._report_bottleneck_stats(expected_ms)
-            self._bottleneck_stats["last_report_ts"] = frame_end
+            self._bottleneck_stats["last_report_ts"] = now
     
     def _apply_pedalboard_effects(self, signal_in):
         """Pedalboardエフェクトを適用"""
