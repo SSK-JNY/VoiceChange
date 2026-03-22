@@ -9,7 +9,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import librosa
 import numpy as np
@@ -104,6 +104,7 @@ class InferenceEngine:
                     "model_name": model_name,
                 }
             )
+        resolved_settings = self._sanitize_settings_for_backend(resolved_settings)
 
         with self._lock, self._weights_only_compat():
             infer = self._ensure_backend()
@@ -137,6 +138,7 @@ class InferenceEngine:
                     "model_name": self.current_model_name,
                 }
             )
+        resolved_settings = self._sanitize_settings_for_backend(resolved_settings)
 
         with self._lock:
             infer = self._ensure_backend()
@@ -195,11 +197,22 @@ class InferenceEngine:
                 t_infer = time.perf_counter()
                 with self._weights_only_compat():
                     infer = self._ensure_backend()
-                    infer.infer_file(str(input_path), str(output_path))
+                    infer_result = self._infer_file_with_safe_f0_retry(
+                        infer,
+                        input_path,
+                        output_path,
+                        self.current_settings,
+                    )
                 infer_ms = (time.perf_counter() - t_infer) * 1000.0
 
                 t_fileio_out = time.perf_counter()
-                converted_audio, converted_sr = sf.read(output_path, dtype="float32")
+                if output_path.exists():
+                    converted_audio, converted_sr = sf.read(output_path, dtype="float32")
+                else:
+                    converted_audio, converted_sr = self._extract_audio_from_infer_result(
+                        infer_result,
+                        infer_spec.sample_rate,
+                    )
                 fileio_out_ms = (time.perf_counter() - t_fileio_out) * 1000.0
 
                 if np.size(converted_audio) == 0:
@@ -243,6 +256,81 @@ class InferenceEngine:
             ),
             output_bytes,
         )
+
+    def _infer_file_with_safe_f0_retry(
+        self,
+        infer: RVCInference,
+        input_path: Path,
+        output_path: Path,
+        settings: InferenceSettings,
+    ) -> Any:
+        """rvc-python の f0 例外時に rmvpe へ一度だけ切り替えて再試行する。"""
+        try:
+            return infer.infer_file(str(input_path), str(output_path))
+        except Exception as exc:
+            err = str(exc)
+            should_retry = (
+                settings.f0_method != "rmvpe"
+                and (
+                    "local variable 'f0' referenced before assignment" in err
+                    or "tuple' object has no attribute 'dtype" in err
+                )
+            )
+            if not should_retry:
+                raise
+
+            logger.warning(
+                "infer_file failed with f0_method=%s; retrying once with rmvpe: %s",
+                settings.f0_method,
+                exc,
+            )
+            infer.set_params(
+                f0up_key=settings.pitch_shift,
+                f0method="rmvpe",
+                index_rate=settings.index_rate,
+                filter_radius=settings.filter_radius,
+                rms_mix_rate=settings.rms_mix_rate,
+                protect=settings.protect,
+            )
+            self.current_settings = InferenceSettings.from_dict(
+                {
+                    **self.current_settings.to_dict(),
+                    "f0_method": "rmvpe",
+                }
+            )
+            return infer.infer_file(str(input_path), str(output_path))
+
+    def _sanitize_settings_for_backend(self, settings: InferenceSettings) -> InferenceSettings:
+        """バックエンド相性で不安定な設定を安全値へ矯正する。"""
+        if settings.backend == "rvc-python" and settings.f0_method != "rmvpe":
+            logger.warning(
+                "f0_method=%s is unstable for backend=%s in this environment; forcing rmvpe",
+                settings.f0_method,
+                settings.backend,
+            )
+            return InferenceSettings.from_dict(
+                {
+                    **settings.to_dict(),
+                    "f0_method": "rmvpe",
+                }
+            )
+        return settings
+
+    def _extract_audio_from_infer_result(self, infer_result: Any, sample_rate: int) -> Tuple[np.ndarray, int]:
+        """infer_file がファイルを書かない実装でも推論結果を正規化して取り出す。"""
+        if isinstance(infer_result, tuple):
+            audio = infer_result[0]
+            if len(infer_result) >= 2:
+                try:
+                    sample_rate = int(infer_result[1])
+                except Exception:
+                    pass
+            return np.asarray(audio, dtype=np.float32), sample_rate
+
+        if infer_result is None:
+            raise ValueError("infer_file produced no output file and returned no audio")
+
+        return np.asarray(infer_result, dtype=np.float32), sample_rate
 
     def _build_stable_infer_input(self, mono_audio: np.ndarray, sample_rate: int) -> np.ndarray:
         """直近履歴を前置して最小推論長を満たす入力を作る。"""

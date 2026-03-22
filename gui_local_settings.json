@@ -4,7 +4,7 @@
     "window_resizable": true,
     "window_title": "リアルタイムボイスチェンジャー",
     "samplerate": 44100,
-    "blocksize": 8192,
+    "blocksize": 12288,
     "initial_pitch_shift": 3,
     "initial_formant_shift": 0,
     "initial_input_gain": 1.0,

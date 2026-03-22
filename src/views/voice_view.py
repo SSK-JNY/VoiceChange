@@ -219,7 +219,7 @@ class AudioView:
         self.blocksize_combo = ttk.Combobox(
             device_frame,
             textvariable=self.blocksize_var,
-            values=["512", "1024", "2048", "4096", "8192"],
+            values=["512", "1024", "2048", "4096", "8192", "12288", "16384"],
             state="readonly",
             width=20,
         )
