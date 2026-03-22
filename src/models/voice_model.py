@@ -55,6 +55,7 @@ class AudioModel:
         self.input_gain = self.gui_settings.initial_input_gain
         self.output_gain = self.gui_settings.initial_output_gain
         self.noise_gate_threshold = self.gui_settings.initial_noise_gate_threshold
+        self.output_delay_ms = max(0.0, float(getattr(self.gui_settings, "output_delay_ms", 0.0)))
 
         # RVC設定
         self.rvc_enabled = False
@@ -86,6 +87,7 @@ class AudioModel:
             "last_report_ts": time.time(),
         }
         self._max_stats_samples = 100  # 直近100フレームを保持
+        self._output_delay_buffer = np.zeros(0, dtype=np.float32)
 
         # デバイス情報
         self.devices = sd.query_devices()
@@ -136,6 +138,11 @@ class AudioModel:
     def set_noise_gate_threshold(self, threshold_db):
         """ノイズゲート閾値を設定（dB, -80～-20）"""
         self.noise_gate_threshold = float(threshold_db)
+
+    def set_output_delay_ms(self, delay_ms: float):
+        """出力遅延(ms)を設定する。変更時は内部バッファをリセットする。"""
+        self.output_delay_ms = max(0.0, float(delay_ms))
+        self._output_delay_buffer = np.zeros(0, dtype=np.float32)
 
     def enable_rvc(self, enabled):
         """RVCを有効/無効化"""
@@ -271,7 +278,8 @@ class AudioModel:
                 quick = indata * self.input_gain
                 if mode == 'normal':
                     quick = self._apply_pedalboard_effects(quick)
-                outdata[:] = quick * self.output_gain
+                delayed = self._apply_output_delay(quick * self.output_gain)
+                outdata[:] = delayed
                 return
         
         with self.lock:
@@ -280,12 +288,14 @@ class AudioModel:
                 frame_idx = getattr(self, '_test_frame_idx', 0)
                 t = np.arange(frames) / self.samplerate + frame_idx / self.samplerate
                 tone = config.AUDIO_MODE_TEST_TONE_GAIN * np.sin(2 * np.pi * config.AUDIO_MODE_TEST_TONE_FREQ * t)
-                outdata[:, 0] = tone * self.output_gain
+                delayed = self._apply_output_delay((tone.reshape(-1, 1)) * self.output_gain)
+                outdata[:] = delayed
                 self._test_frame_idx = frame_idx + frames
             
             elif mode == 'passthrough':
                 # パススルー: エフェクト無し
-                outdata[:] = indata * self.input_gain * self.output_gain
+                delayed = self._apply_output_delay(indata * self.input_gain * self.output_gain)
+                outdata[:] = delayed
             
             else:  # normal
                 # 通常: Pedalboard エフェクト適用（入力ゲイン→ノイズ除去→フォルマント→Pedalboard→出力ゲイン）
@@ -332,7 +342,8 @@ class AudioModel:
                 
                 # 出力ゲイン適用
                 t5 = time.perf_counter()
-                outdata[:] = processed_signal * self.output_gain
+                delayed = self._apply_output_delay(processed_signal * self.output_gain)
+                outdata[:] = delayed
                 self._record_timing("output_gain_ms", t5)
         
         # 総処理時間を計測
@@ -357,6 +368,29 @@ class AudioModel:
             return effected.T
         else:
             return signal_in
+
+    def _apply_output_delay(self, signal_in: np.ndarray) -> np.ndarray:
+        """設定された遅延ぶんだけ出力を遅らせる。"""
+        delay_samples = int(self.samplerate * (self.output_delay_ms / 1000.0))
+        mono = np.asarray(signal_in[:, 0], dtype=np.float32)
+
+        if delay_samples <= 0:
+            return signal_in
+
+        merged = np.concatenate([self._output_delay_buffer, mono]).astype(np.float32, copy=False)
+        available = max(0, len(merged) - delay_samples)
+        take = min(len(mono), available)
+
+        if take > 0:
+            out_mono = merged[:take]
+        else:
+            out_mono = np.zeros(0, dtype=np.float32)
+
+        if take < len(mono):
+            out_mono = np.pad(out_mono, (0, len(mono) - take))
+
+        self._output_delay_buffer = merged[take:]
+        return out_mono.reshape(-1, 1)
 
     def _record_timing(self, key: str, start_time: float):
         """処理時間を記録"""

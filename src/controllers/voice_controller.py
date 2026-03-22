@@ -3,6 +3,7 @@
 import logging
 import threading
 import time
+from datetime import datetime
 from typing import Optional
 
 import sounddevice as sd
@@ -56,6 +57,7 @@ class AudioController:
         self.view.fast_local_mix_var.trace('w', self._on_fast_local_mix_change)
         self.view.stream_in_buf_var.trace('w', self._on_stream_in_buf_change)
         self.view.stream_out_buf_var.trace('w', self._on_stream_out_buf_change)
+        self.view.output_delay_ms_var.trace('w', self._on_output_delay_ms_change)
         self.view.input_gain_var.trace('w', self._on_input_gain_change)
         self.view.output_gain_var.trace('w', self._on_output_gain_change)
         self.view.formant_var.trace('w', self._on_formant_change)
@@ -69,18 +71,31 @@ class AudioController:
 
         # 推論サーバ接続ボタン
         self.view.connect_button.config(command=self.connect_to_server)
+
+    def _log_param_change(self, name: str, old_value, new_value, apply_timing: str = "immediate"):
+        """UIからのパラメータ変更を時刻付きでログ出力する。"""
+        if old_value == new_value:
+            return
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        msg = f"[ParamChange] {ts} | {name} | {old_value} -> {new_value} | apply={apply_timing}"
+        print(msg)
+        logger.info(msg)
     
     def _on_pitch_change(self, *args):
         """ピッチシフト変更時"""
         value = self.view.pitch_var.get()
+        old = self.model.pitch_shift
         self.model.set_pitch_shift(value)
         self.view.update_pitch_label(value)
+        self._log_param_change("pitch_shift", old, self.model.pitch_shift)
     
     def _on_input_gain_change(self, *args):
         """入力ゲイン変更時"""
         value = self.view.input_gain_var.get()
+        old = self.model.input_gain
         self.model.set_input_gain(value)
         self.view.update_input_gain_label(value)
+        self._log_param_change("input_gain", old, self.model.input_gain)
 
     def _on_blocksize_change(self, *args):
         """ブロックサイズ変更時"""
@@ -89,11 +104,13 @@ class AudioController:
             value = int(raw)
         except ValueError:
             return
-        if value <= 0 or value == self.model.blocksize:
+        old = self.model.blocksize
+        if value <= 0 or value == old:
             return
 
         self.model.blocksize = value
         self.model.gui_settings.blocksize = value
+        self._log_param_change("blocksize", old, value, "next-start" if self.is_running else "immediate")
 
         if self.is_running:
             self.view.set_status(
@@ -111,8 +128,10 @@ class AudioController:
         except ValueError:
             return
         value = max(0.03, value)
+        old = self.model.rvc_processing_timeout
         self.model.gui_settings.rvc_processing_timeout_sec = value
         self.model.rvc_processing_timeout = value
+        self._log_param_change("rvc_processing_timeout_sec", old, value)
 
     def _on_fast_rpc_every_change(self, *args):
         """高速モードRPC間隔変更時"""
@@ -121,7 +140,10 @@ class AudioController:
             value = int(raw)
         except ValueError:
             return
-        self.model.gui_settings.fast_mode_rpc_every_n_chunks = max(1, value)
+        value = max(1, value)
+        old = self.model.gui_settings.fast_mode_rpc_every_n_chunks
+        self.model.gui_settings.fast_mode_rpc_every_n_chunks = value
+        self._log_param_change("fast_mode_rpc_every_n_chunks", old, value)
 
     def _on_fast_rpc_timeout_change(self, *args):
         """高速モードRPCタイムアウト変更時"""
@@ -130,7 +152,10 @@ class AudioController:
             value = float(raw)
         except ValueError:
             return
-        self.model.gui_settings.fast_mode_rpc_timeout_sec = max(0.03, value)
+        value = max(0.03, value)
+        old = self.model.gui_settings.fast_mode_rpc_timeout_sec
+        self.model.gui_settings.fast_mode_rpc_timeout_sec = value
+        self._log_param_change("fast_mode_rpc_timeout_sec", old, value)
 
     def _on_fast_rpc_bootstrap_timeout_change(self, *args):
         """高速モード初回RPCタイムアウト変更時"""
@@ -139,7 +164,10 @@ class AudioController:
             value = float(raw)
         except ValueError:
             return
-        self.model.gui_settings.fast_mode_rpc_bootstrap_timeout_sec = max(0.05, value)
+        value = max(0.05, value)
+        old = self.model.gui_settings.fast_mode_rpc_bootstrap_timeout_sec
+        self.model.gui_settings.fast_mode_rpc_bootstrap_timeout_sec = value
+        self._log_param_change("fast_mode_rpc_bootstrap_timeout_sec", old, value)
 
     def _on_fast_local_mix_change(self, *args):
         """高速モード ローカル混合比変更時"""
@@ -148,7 +176,10 @@ class AudioController:
             value = float(raw)
         except ValueError:
             return
-        self.model.gui_settings.fast_mode_local_mix = min(1.0, max(0.0, value))
+        value = min(1.0, max(0.0, value))
+        old = self.model.gui_settings.fast_mode_local_mix
+        self.model.gui_settings.fast_mode_local_mix = value
+        self._log_param_change("fast_mode_local_mix", old, value)
 
     def _on_stream_in_buf_change(self, *args):
         """入力バッファ秒数変更時"""
@@ -157,7 +188,10 @@ class AudioController:
             value = float(raw)
         except ValueError:
             return
-        self.model.gui_settings.stream_input_buffer_seconds = max(0.1, value)
+        value = max(0.1, value)
+        old = self.model.gui_settings.stream_input_buffer_seconds
+        self.model.gui_settings.stream_input_buffer_seconds = value
+        self._log_param_change("stream_input_buffer_seconds", old, value, "next-start" if self.is_running else "immediate")
         if self.is_running:
             self.view.set_status("入力バッファ設定は次回開始時に反映されます", "orange")
 
@@ -168,34 +202,56 @@ class AudioController:
             value = float(raw)
         except ValueError:
             return
-        self.model.gui_settings.stream_output_buffer_seconds = max(0.1, value)
+        value = max(0.1, value)
+        old = self.model.gui_settings.stream_output_buffer_seconds
+        self.model.gui_settings.stream_output_buffer_seconds = value
+        self._log_param_change("stream_output_buffer_seconds", old, value, "next-start" if self.is_running else "immediate")
         if self.is_running:
             self.view.set_status("出力バッファ設定は次回開始時に反映されます", "orange")
+
+    def _on_output_delay_ms_change(self, *args):
+        """出力遅延(ms)変更時"""
+        raw = self.view.output_delay_ms_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        value = max(0.0, min(2000.0, value))
+        old = self.model.gui_settings.output_delay_ms
+        self.model.gui_settings.output_delay_ms = value
+        self.model.set_output_delay_ms(value)
+        self._log_param_change("output_delay_ms", old, value)
     
     def _on_output_gain_change(self, *args):
         """出力ゲイン変更時"""
         value = self.view.output_gain_var.get()
+        old = self.model.output_gain
         self.model.set_output_gain(value)
         self.view.update_output_gain_label(value)
+        self._log_param_change("output_gain", old, self.model.output_gain)
     
     def _on_formant_change(self, *args):
         """フォルマントシフト変更時"""
         value = self.view.formant_var.get()
+        old = self.model.formant_shift
         self.model.set_formant_shift(value)
         self.view.update_formant_label(value)
+        self._log_param_change("formant_shift", old, self.model.formant_shift)
     
     def _on_noise_gate_change(self, *args):
         """ノイズゲート変更時"""
         value = self.view.noise_gate_var.get()
+        old = self.model.noise_gate_threshold
         self.model.set_noise_gate_threshold(value)
         self.view.update_noise_gate_label(value)
+        self._log_param_change("noise_gate_threshold", old, self.model.noise_gate_threshold)
 
     def _on_rvc_enabled_change(self, *args):
         """RVC有効/無効変更時"""
         enabled = self.view.rvc_enabled_var.get()
-        print(f"RVC有効化変更: {enabled}")
+        old = self.model.rvc_enabled
         self.model.enable_rvc(enabled)
-        print(f"モデルRVC有効状態: {self.model.rvc_enabled}")
+        self._log_param_change("rvc_enabled", old, self.model.rvc_enabled)
 
     def _on_rvc_model_change(self, *args):
         """RVCモデル変更時。サーバ接続中はサーバ側でロードを試みる。"""
@@ -204,7 +260,9 @@ class AudioController:
             return
 
         # AudioModel 側には常に選択モデル名を保持しておく
+        old = self.model.rvc_model_name
         self.model.set_rvc_model(model_name)
+        self._log_param_change("rvc_model_name", old, self.model.rvc_model_name)
 
         if self.inference_client is not None and self.inference_client.is_connected:
             # サーバ経由でロード（バックグラウンドスレッドで実行）
@@ -213,20 +271,26 @@ class AudioController:
     def _on_rvc_pitch_change(self, *args):
         """RVCピッチシフト変更時"""
         value = self.view.rvc_pitch_var.get()
+        old = self.model.rvc_pitch_shift
         self.model.set_rvc_pitch_shift(value)
         self.view.update_rvc_pitch_label(value)
+        self._log_param_change("rvc_pitch_shift", old, self.model.rvc_pitch_shift)
 
     def _on_rvc_fast_mode_change(self, *args):
         """RVC高速モード変更時"""
         enabled = self.view.rvc_fast_mode_var.get()
+        old = self.model.rvc_fast_mode
         self.model.set_rvc_fast_mode(enabled)
+        self._log_param_change("rvc_fast_mode", old, self.model.rvc_fast_mode)
         mode_text = "ON" if enabled else "OFF"
         self.view.set_status(f"RVC高速モード: {mode_text}", "blue" if enabled else "red")
 
     def on_rvc_fast_mode_change(self):
         """RVC高速モード変更時 (Checkbutton用)"""
         enabled = self.view.rvc_fast_mode_var.get()
+        old = self.model.rvc_fast_mode
         self.model.set_rvc_fast_mode(enabled)
+        self._log_param_change("rvc_fast_mode", old, self.model.rvc_fast_mode)
         mode_text = "ON" if enabled else "OFF"
         self.view.set_status(f"RVC高速モード: {mode_text}", "blue" if enabled else "red")
     
@@ -248,6 +312,9 @@ class AudioController:
         if not valid:
             messagebox.showerror("デバイスエラー", msg)
             return
+
+        # ストリーム開始時に出力遅延バッファをリセット
+        self.model.set_output_delay_ms(self.model.gui_settings.output_delay_ms)
         
         self.is_running = True
         self.view.disable_start_button()

@@ -35,6 +35,7 @@ class AudioView:
         self.fast_local_mix_var = tk.StringVar(value=f"{self.gui_settings.fast_mode_local_mix:.2f}")
         self.stream_in_buf_var = tk.StringVar(value=f"{self.gui_settings.stream_input_buffer_seconds:.2f}")
         self.stream_out_buf_var = tk.StringVar(value=f"{self.gui_settings.stream_output_buffer_seconds:.2f}")
+        self.output_delay_ms_var = tk.StringVar(value=f"{self.gui_settings.output_delay_ms:.0f}")
         self.pitch_var = tk.IntVar(value=self.gui_settings.initial_pitch_shift)
         self.input_gain_var = tk.DoubleVar(value=self.gui_settings.initial_input_gain)
         self.output_gain_var = tk.DoubleVar(value=self.gui_settings.initial_output_gain)
@@ -389,7 +390,7 @@ class AudioView:
         self.fast_local_mix_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.fast_local_mix_var,
-            values=["0.05", "0.10", "0.15", "0.20", "0.25", "0.35", "0.50"],
+            values=["0.05", "0.10", "0.15", "0.20", "0.25", "0.35", "0.50", "0.60", "0.70", "0.80", "0.90", "1.00"],
             state="readonly",
             width=10,
         )
@@ -414,6 +415,16 @@ class AudioView:
             width=8,
         )
         self.stream_out_buf_combo.grid(row=3, column=3, sticky="w", padx=5, pady=(4, 0))
+
+        ttk.Label(tune_frame, text="出力遅延(ms):").grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self.output_delay_ms_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.output_delay_ms_var,
+            values=["0", "20", "40", "60", "80", "100", "150", "200", "300", "500"],
+            state="readonly",
+            width=10,
+        )
+        self.output_delay_ms_combo.grid(row=3, column=1, sticky="w", padx=5, pady=(4, 0))
 
         # RVC設定フレーム
         rvc_frame = ttk.LabelFrame(scrollable_frame, text="RVC設定 (AI音声変換)", padding=10)
