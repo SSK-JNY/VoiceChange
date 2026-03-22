@@ -1,6 +1,9 @@
 """推論設定（WSL 側へ送る設定）。"""
 
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass
+from typing import Optional
 
 from src.protocol import InferenceSettings
 
@@ -34,7 +37,7 @@ class InferenceRuntimeSettings:
         settings.to_protocol_settings()
         return settings
 
-    def to_protocol_settings(self, model_name: str | None = None) -> InferenceSettings:
+    def to_protocol_settings(self, model_name: Optional[str] = None) -> InferenceSettings:
         return InferenceSettings(
             model_name=(model_name if model_name is not None else self.model_name),
             pitch_shift=self.pitch_shift,

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Tkinter UIビュー"""
+from __future__ import annotations
+
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
+from typing import Optional
 import config
 from src.app.gui_local_settings import GuiLocalSettings
 
@@ -10,12 +13,10 @@ from src.app.gui_local_settings import GuiLocalSettings
 class AudioView:
     """オーディオGUI - ビュー層"""
     
-    def __init__(self, root, input_devices, output_devices, gui_settings: GuiLocalSettings | None = None):
+    def __init__(self, root, input_devices, output_devices, gui_settings: Optional[GuiLocalSettings] = None):
         self.gui_settings = gui_settings or GuiLocalSettings()
         self.root = root
         self.root.title(self.gui_settings.window_title)
-        self.root.geometry(f"{self.gui_settings.window_width}x{self.gui_settings.window_height}")
-        self.root.resizable(self.gui_settings.window_resizable, self.gui_settings.window_resizable)
 
         self._setup_fonts()
         
@@ -54,6 +55,7 @@ class AudioView:
         # ボタン
         self.start_button = None
         self.stop_button = None
+        self.passthrough_button = None
         
         # デバイス情報
         self.input_devices = input_devices
@@ -102,18 +104,63 @@ class AudioView:
     
     def _build_ui(self):
         """UI構築"""
+        # スクロール可能なキャンバスを作成（縦横両方向）
+        # フレームコンテナ
+        frame_container = ttk.Frame(self.root)
+        frame_container.pack(fill="both", expand=True)
+        
+        # Canvas
+        canvas = tk.Canvas(frame_container, highlightthickness=0, bg="white")
+        
+        # スクロールバー（縦）
+        vscrollbar = ttk.Scrollbar(frame_container, orient="vertical", command=canvas.yview)
+        
+        # スクロールバー（横）
+        hscrollbar = ttk.Scrollbar(frame_container, orient="horizontal", command=canvas.xview)
+        
+        # スクロール可能なフレーム
+        scrollable_frame = ttk.Frame(canvas)
+        scrollable_frame_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        def on_frame_configure(event=None):
+            # Canvas のスクロール領域を更新
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # scrollable_frame をキャンバス幅に合わせる
+            canvas_width = canvas.winfo_width()
+            if canvas_width > 1:
+                canvas.itemconfig(scrollable_frame_id, width=canvas_width)
+        
+        scrollable_frame.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(scrollable_frame_id, width=e.width) or on_frame_configure())
+        
+        canvas.configure(yscrollcommand=vscrollbar.set, xscrollcommand=hscrollbar.set)
+        
+        # スクロール操作有効化（マウスホイール）
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # グリッドレイアウト設定
+        frame_container.grid_rowconfigure(0, weight=1)
+        frame_container.grid_columnconfigure(0, weight=1)
+        
+        # Canvas配置
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vscrollbar.grid(row=0, column=1, sticky="ns")
+        hscrollbar.grid(row=1, column=0, sticky="ew")
+        
         # タイトル
-        title = ttk.Label(self.root, text=self.gui_settings.window_title, 
+        title = ttk.Label(scrollable_frame, text=self.gui_settings.window_title, 
                           font=self.font_title)
         title.pack(pady=10)
         
         # ステータス表示
-        status_label = ttk.Label(self.root, textvariable=self.status_var, 
+        status_label = ttk.Label(scrollable_frame, textvariable=self.status_var, 
                                  font=self.font_label, foreground="red")
         status_label.pack(pady=5)
         
         # デバイス選択フレーム
-        device_frame = ttk.LabelFrame(self.root, text="デバイス設定", padding=10)
+        device_frame = ttk.LabelFrame(scrollable_frame, text="デバイス設定", padding=10)
         device_frame.pack(fill="x", padx=10, pady=10)
         
         ttk.Label(device_frame, text="入力デバイス:").grid(row=0, column=0, sticky="w")
@@ -171,7 +218,7 @@ class AudioView:
         device_frame.columnconfigure(1, weight=1)
         
         # エフェクト設定フレーム
-        effect_frame = ttk.LabelFrame(self.root, text="エフェクト設定", padding=10)
+        effect_frame = ttk.LabelFrame(scrollable_frame, text="エフェクト設定", padding=10)
         effect_frame.pack(fill="x", padx=10, pady=10)
         
         # ピッチシフト
@@ -247,7 +294,7 @@ class AudioView:
         effect_frame.columnconfigure(1, weight=1)
 
         # 推論サーバ接続フレーム
-        server_frame = ttk.LabelFrame(self.root, text="推論サーバ (WSL)", padding=8)
+        server_frame = ttk.LabelFrame(scrollable_frame, text="推論サーバ (WSL)", padding=8)
         server_frame.pack(fill="x", padx=10, pady=(5, 0))
 
         ttk.Label(server_frame, text="URL:").grid(row=0, column=0, sticky="w")
@@ -274,7 +321,7 @@ class AudioView:
         server_frame.columnconfigure(1, weight=1)
 
         # RVC設定フレーム
-        rvc_frame = ttk.LabelFrame(self.root, text="RVC設定 (AI音声変換)", padding=10)
+        rvc_frame = ttk.LabelFrame(scrollable_frame, text="RVC設定 (AI音声変換)", padding=10)
         rvc_frame.pack(fill="x", padx=10, pady=10)
 
         # RVC有効/無効
@@ -312,10 +359,6 @@ class AudioView:
         )
         rvc_pitch_slider.grid(row=3, column=1, sticky="ew", padx=5)
 
-        # RVCモデルダウンロードボタン
-        self.rvc_download_button = ttk.Button(rvc_frame, text="モデルダウンロード")
-        self.rvc_download_button.grid(row=4, column=0, columnspan=3, pady=5)
-
         # RVC高速モードチェックボックス
         self.rvc_fast_mode_var = tk.BooleanVar(value=False)
         self.rvc_fast_mode_check = ttk.Checkbutton(
@@ -328,7 +371,7 @@ class AudioView:
         rvc_frame.columnconfigure(1, weight=1)
 
         # コントロールボタンフレーム
-        button_frame = ttk.Frame(self.root)
+        button_frame = ttk.Frame(scrollable_frame)
         button_frame.pack(pady=15)
         
         self.start_button = ttk.Button(button_frame, text="開始")
@@ -337,8 +380,11 @@ class AudioView:
         self.stop_button = ttk.Button(button_frame, text="停止", state="disabled")
         self.stop_button.pack(side="left", padx=5)
         
+        self.passthrough_button = ttk.Button(button_frame, text="パススルー", state="disabled")
+        self.passthrough_button.pack(side="left", padx=5)
+        
         # 情報フレーム
-        info_frame = ttk.LabelFrame(self.root, text="情報", padding=10)
+        info_frame = ttk.LabelFrame(scrollable_frame, text="情報", padding=10)
         info_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
         info_text = """
@@ -434,6 +480,17 @@ RVC (Retrieval-based Voice Conversion):
     def disable_stop_button(self):
         """停止ボタン無効化"""
         self.stop_button.config(state="disabled")
+    
+    def enable_passthrough_button(self):
+        """パススルーボタン有効化"""
+        if self.input_devices and self.output_devices:
+            self.passthrough_button.config(state="normal")
+        else:
+            self.passthrough_button.config(state="disabled")
+    
+    def disable_passthrough_button(self):
+        """パススルーボタン無効化"""
+        self.passthrough_button.config(state="disabled")
     
     def enable_device_controls(self):
         """デバイス選択有効化"""

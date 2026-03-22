@@ -7,9 +7,9 @@ from dataclasses import asdict, dataclass
 class GuiLocalSettings:
     """GUI・ローカル音声処理向け設定。"""
 
-    window_width: int = 500
-    window_height: int = 800
-    window_resizable: bool = False
+    window_width: int = 900
+    window_height: int = 1200
+    window_resizable: bool = True
     window_title: str = "リアルタイムボイスチェンジャー"
 
     # ローカル音声設定
@@ -35,9 +35,9 @@ class GuiLocalSettings:
     @classmethod
     def from_dict(cls, data: dict) -> "GuiLocalSettings":
         return cls(
-            window_width=int(data.get("window_width", 500)),
-            window_height=int(data.get("window_height", 800)),
-            window_resizable=bool(data.get("window_resizable", False)),
+            window_width=int(data.get("window_width", 900)),
+            window_height=int(data.get("window_height", 1200)),
+            window_resizable=bool(data.get("window_resizable", True)),
             window_title=str(data.get("window_title", "リアルタイムボイスチェンジャー")),
             samplerate=int(data.get("samplerate", 44100)),
             blocksize=int(data.get("blocksize", 1024)),

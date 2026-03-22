@@ -24,8 +24,11 @@ def main():
         print(f"出力デバイス数: {len(model.output_devices)}")
         
         # View 初期化
-        print("View を初期化中...")
+        print(f"View を初期化中... (サイズ: {gui_settings.window_width}x{gui_settings.window_height}, リサイズ可能: {gui_settings.window_resizable})")
         root = tk.Tk()
+        root.geometry(f"{gui_settings.window_width}x{gui_settings.window_height}")
+        root.resizable(gui_settings.window_resizable, gui_settings.window_resizable)
+        print(f"ウィンドウ設定完了: 調整可能={root.attributes('-topmost')}")
         view = AudioView(
             root,
             model.input_devices,

@@ -1,7 +1,10 @@
 """設定ファイルのロード処理。"""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import Optional
 
 from .gui_local_settings import GuiLocalSettings
 from .inference_runtime_settings import InferenceRuntimeSettings
@@ -22,7 +25,7 @@ def _write_json(path: Path, payload: dict) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def load_gui_local_settings(path: Path | None = None) -> GuiLocalSettings:
+def load_gui_local_settings(path: Optional[Path] = None) -> GuiLocalSettings:
     target = path or _GUI_SETTINGS_PATH
     if not target.exists():
         defaults = GuiLocalSettings()
@@ -31,7 +34,7 @@ def load_gui_local_settings(path: Path | None = None) -> GuiLocalSettings:
     return GuiLocalSettings.from_dict(_read_json(target))
 
 
-def load_inference_runtime_settings(path: Path | None = None) -> InferenceRuntimeSettings:
+def load_inference_runtime_settings(path: Optional[Path] = None) -> InferenceRuntimeSettings:
     target = path or _INFERENCE_SETTINGS_PATH
     if not target.exists():
         defaults = InferenceRuntimeSettings()

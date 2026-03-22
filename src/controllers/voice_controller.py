@@ -23,6 +23,7 @@ class AudioController:
         self.stream_thread = None
         self.is_running = False
         self.current_mode = 'normal'  # normal, passthrough, test-tone
+        self._passthrough_mode_requested = False
 
         # WSL 推論サーバクライアント（接続後に設定される）
         self.inference_client = None
@@ -45,6 +46,7 @@ class AudioController:
         """UI イベントをバインド"""
         self.view.start_button.config(command=self.start_stream)
         self.view.stop_button.config(command=self.stop_stream)
+        self.view.passthrough_button.config(command=self.passthrough_stream)
         self.view.pitch_var.trace('w', self._on_pitch_change)
         self.view.input_gain_var.trace('w', self._on_input_gain_change)
         self.view.output_gain_var.trace('w', self._on_output_gain_change)
@@ -55,7 +57,6 @@ class AudioController:
         self.view.rvc_enabled_var.trace('w', self._on_rvc_enabled_change)
         self.view.rvc_model_var.trace('w', self._on_rvc_model_change)
         self.view.rvc_pitch_var.trace('w', self._on_rvc_pitch_change)
-        self.view.rvc_download_button.config(command=self._on_rvc_download)
 
         # 推論サーバ接続ボタン
         self.view.connect_button.config(command=self.connect_to_server)
@@ -125,23 +126,14 @@ class AudioController:
         """RVC高速モード変更時 (Checkbutton用)"""
         enabled = self.view.rvc_fast_mode_var.get()
         self.model.set_rvc_fast_mode(enabled)
-
-    def _on_rvc_download(self):
-        """RVCモデルダウンロード"""
-        try:
-            self.view.rvc_download_button.config(state="disabled", text="ダウンロード中...")
-            self.model.download_rvc_pretrained_models()
-            # モデル一覧を更新
-            models = self.model.get_available_rvc_models()
-            self.view.update_rvc_models(models)
-            messagebox.showinfo("完了", "RVC事前学習モデルのダウンロードが完了しました")
-        except Exception as e:
-            messagebox.showerror("エラー", f"ダウンロードに失敗しました: {e}")
-        finally:
-            self.view.rvc_download_button.config(state="normal", text="モデルダウンロード")
     
     def start_stream(self):
         """ストリーム開始"""
+        # passthroughモード以外は normalに統一
+        if self.current_mode != 'passthrough':
+            self.current_mode = 'normal'
+        self._passthrough_mode_requested = False
+        
         input_idx, output_idx = self.view.get_selected_devices()
         
         if input_idx is None or output_idx is None:
@@ -156,6 +148,7 @@ class AudioController:
         
         self.is_running = True
         self.view.disable_start_button()
+        self.view.disable_passthrough_button()
         self.view.enable_stop_button()
         self.view.set_status("実行中", "green")
         
@@ -190,7 +183,9 @@ class AudioController:
         
         finally:
             self.is_running = False
+            self.current_mode = 'normal'
             self.view.enable_start_button()
+            self.view.enable_passthrough_button()
             self.view.disable_stop_button()
             self.view.set_status("停止中", "red")
     
@@ -199,6 +194,12 @@ class AudioController:
         self.is_running = False
         if self.stream_thread:
             self.stream_thread.join(timeout=2)
+    
+    def passthrough_stream(self):
+        """パススルーモードでストリーム開始"""
+        self._passthrough_mode_requested = True
+        self.current_mode = 'passthrough'
+        self.start_stream()
     
     def set_mode(self, mode):
         """処理モード設定（normal, passthrough, test-tone）"""

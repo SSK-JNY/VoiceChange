@@ -5,12 +5,15 @@
 WSL 推論サーバ（InferenceClient）経由の RPC 推論に責務を移す。
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import logging
 import os
 import sys
 import threading
 import time
+from typing import Optional
 
 import librosa
 import numpy as np
@@ -28,7 +31,7 @@ from src.app.inference_runtime_settings import InferenceRuntimeSettings
 class AudioModel:
     """オーディオモデル - デバイス管理とエフェクト処理"""
 
-    def __init__(self, gui_settings: GuiLocalSettings | None = None, inference_settings: InferenceRuntimeSettings | None = None):
+    def __init__(self, gui_settings: Optional[GuiLocalSettings] = None, inference_settings: Optional[InferenceRuntimeSettings] = None):
         self.gui_settings = gui_settings or GuiLocalSettings()
         self.inference_runtime_settings = inference_settings or InferenceRuntimeSettings()
 
