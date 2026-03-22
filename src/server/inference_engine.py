@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -13,7 +12,6 @@ from typing import Optional, Tuple
 
 import librosa
 import numpy as np
-import soundfile as sf
 import torch
 
 from src.protocol import (
@@ -31,14 +29,31 @@ from .model_registry import ModelRegistry
 
 try:
     from rvc_python.infer import RVCInference
+    from rvc_python.modules.vc import modules as rvc_vc_modules
 
     RVC_PYTHON_AVAILABLE = True
 except Exception:
     RVCInference = None
+    rvc_vc_modules = None
     RVC_PYTHON_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
+
+
+class _InMemoryAudioInput:
+    """rvc_python.lib.audio.load_audio 向けのメモリ入力アダプタ。"""
+
+    def __init__(self, sample_rate: int, pcm_i16: np.ndarray):
+        self._sample_rate = int(sample_rate)
+        self._pcm_i16 = np.asarray(pcm_i16, dtype=np.int16)
+
+    def __getitem__(self, idx):
+        if idx == 0:
+            return self._sample_rate
+        if idx == 1:
+            return self._pcm_i16
+        raise IndexError(idx)
 
 
 class InferenceEngine:
@@ -60,6 +75,7 @@ class InferenceEngine:
         self._inference_times_ms = []
         self._max_timing_samples = 100
         self._last_stats_report_ts = time.time()
+        self._inmemory_audio_patch_applied = False
 
     @contextmanager
     def _weights_only_compat(self):
@@ -78,7 +94,29 @@ class InferenceEngine:
             raise RuntimeError("rvc-python is not available in current environment")
         if self._inference is None:
             self._inference = RVCInference(device=self.device)
+        self._ensure_inmemory_audio_patch()
         return self._inference
+
+    def _ensure_inmemory_audio_patch(self) -> None:
+        """rvc_python の load_audio にメモリ入力互換を追加する。"""
+        if self._inmemory_audio_patch_applied:
+            return
+        if rvc_vc_modules is None:
+            return
+
+        original_load_audio = rvc_vc_modules.load_audio
+
+        def load_audio_compat(file, sr):
+            if isinstance(file, _InMemoryAudioInput):
+                audio = file[1].astype(np.float32) / 32768.0
+                if audio.ndim == 2:
+                    audio = np.mean(audio, axis=-1)
+                return librosa.resample(audio, orig_sr=file[0], target_sr=16000)
+            return original_load_audio(file, sr)
+
+        rvc_vc_modules.load_audio = load_audio_compat
+        self._inmemory_audio_patch_applied = True
+        logger.info("Applied in-memory audio patch for rvc_python load_audio")
 
     def list_models(self) -> list[ModelInfo]:
         return self.registry.list_models()
@@ -183,25 +221,44 @@ class InferenceEngine:
         )
 
         try:
-            with self._lock, tempfile.TemporaryDirectory(prefix="voicechange_rpc_") as temp_dir:
-                temp_dir_path = Path(temp_dir)
-                input_path = temp_dir_path / "input.wav"
-                output_path = temp_dir_path / "output.wav"
-                
+            with self._lock:
+                # rvc_python は int16 相当の配列を受けるため、メモリ入力に変換する
                 t_fileio_in = time.perf_counter()
-                sf.write(input_path, infer_audio, infer_spec.sample_rate)
+                pcm_i16 = (np.clip(infer_audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+                mem_input = _InMemoryAudioInput(infer_spec.sample_rate, pcm_i16)
                 fileio_in_ms = (time.perf_counter() - t_fileio_in) * 1000.0
 
                 t_infer = time.perf_counter()
                 with self._weights_only_compat():
                     infer = self._ensure_backend()
-                    infer.infer_file(str(input_path), str(output_path))
+                    if not infer.current_model:
+                        raise RuntimeError("No active model")
+
+                    model_info = infer.models[infer.current_model]
+                    file_index = model_info.get("index", "")
+                    converted_audio = infer.vc.vc_single(
+                        sid=0,
+                        input_audio_path=mem_input,
+                        f0_up_key=infer.f0up_key,
+                        f0_method=infer.f0method,
+                        file_index=file_index,
+                        index_rate=infer.index_rate,
+                        filter_radius=infer.filter_radius,
+                        resample_sr=infer.resample_sr,
+                        rms_mix_rate=infer.rms_mix_rate,
+                        protect=infer.protect,
+                        f0_file="",
+                        file_index2="",
+                    )
+                    converted_sr = int(getattr(infer.vc, "tgt_sr", infer_spec.sample_rate))
                 infer_ms = (time.perf_counter() - t_infer) * 1000.0
 
-                t_fileio_out = time.perf_counter()
-                converted_audio, converted_sr = sf.read(output_path, dtype="float32")
-                fileio_out_ms = (time.perf_counter() - t_fileio_out) * 1000.0
-                
+                # 入出力ファイルI/Oは使用しない
+                fileio_out_ms = 0.0
+
+                if isinstance(converted_audio, tuple):
+                    raise ValueError(f"invalid infer output type: {type(converted_audio)}")
+                converted_audio = np.asarray(converted_audio, dtype=np.float32)
                 if np.size(converted_audio) == 0:
                     raise ValueError("empty infer output")
         except Exception as exc:

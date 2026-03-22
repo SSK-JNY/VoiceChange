@@ -281,12 +281,11 @@ class AudioModel:
             input_overflow = bool(getattr(status, "input_overflow", False))
             output_underflow = bool(getattr(status, "output_underflow", False))
             if input_overflow or output_underflow:
-                if self.strict_rvc_only and self.rvc_enabled:
-                    if self._last_rvc_success_output is not None:
-                        held = self._fit_audio_length(self._last_rvc_success_output, len(indata))
-                        quick = held.reshape(-1, 1)
-                    else:
-                        quick = np.zeros_like(indata, dtype=np.float32)
+                held = self._get_held_rvc_output(len(indata)) if self.rvc_enabled else None
+                if held is not None:
+                    quick = held.reshape(-1, 1)
+                elif self.strict_rvc_only and self.rvc_enabled:
+                    quick = np.zeros_like(indata, dtype=np.float32)
                 else:
                     quick = indata * self.input_gain
                     if mode == 'normal':
@@ -343,21 +342,19 @@ class AudioModel:
                                 processed_signal = self._apply_rvc_rpc(rvc_input)
                         except Exception as e:
                             self.logger.warning("RVC RPC failed: %s", e)
-                            if self.strict_rvc_only:
-                                if self._last_rvc_success_output is not None:
-                                    held = self._fit_audio_length(self._last_rvc_success_output, len(rvc_input))
-                                    processed_signal = held.reshape(-1, 1)
-                                else:
-                                    processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
+                            held = self._get_held_rvc_output(len(rvc_input))
+                            if held is not None:
+                                processed_signal = held.reshape(-1, 1)
+                            elif self.strict_rvc_only:
+                                processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
                             else:
                                 processed_signal = self._apply_pedalboard_effects(formant_processed)
                     else:
-                        if self.strict_rvc_only:
-                            if self._last_rvc_success_output is not None:
-                                held = self._fit_audio_length(self._last_rvc_success_output, len(formant_processed))
-                                processed_signal = held.reshape(-1, 1)
-                            else:
-                                processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
+                        held = self._get_held_rvc_output(len(formant_processed))
+                        if held is not None:
+                            processed_signal = held.reshape(-1, 1)
+                        elif self.strict_rvc_only:
+                            processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
                         else:
                             processed_signal = self._apply_pedalboard_effects(formant_processed)
                 else:
@@ -579,13 +576,20 @@ class AudioModel:
             blended = (mix * local_fast) + ((1.0 - mix) * cached)
             return blended.reshape(-1, 1)
 
+        held = self._get_held_rvc_output(len(local_fast))
+        if held is not None:
+            return held.reshape(-1, 1)
+
         if self.strict_rvc_only:
-            if self._last_rvc_success_output is not None:
-                held = self._fit_audio_length(self._last_rvc_success_output, len(local_fast))
-                return held.reshape(-1, 1)
             return np.zeros((len(local_fast), 1), dtype=np.float32)
 
         return local_fast.reshape(-1, 1)
+
+    def _get_held_rvc_output(self, target_len: int) -> Optional[np.ndarray]:
+        """直近のRVC成功出力を target_len に整形して返す。無ければ None。"""
+        if self._last_rvc_success_output is None:
+            return None
+        return self._fit_audio_length(self._last_rvc_success_output, target_len)
 
     def _fit_audio_length(self, audio: np.ndarray, target_len: int) -> np.ndarray:
         """長さ不一致時にゼロ詰め/切り詰めで target_len へ整形する。"""
