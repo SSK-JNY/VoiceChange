@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Tkinter GUIエントリポイント"""
+import logging
 import tkinter as tk
 from . import config
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s - %(message)s",
+)
 from .settings_loader import load_gui_local_settings, load_inference_runtime_settings
 from ..models import AudioModel
 from ..views import AudioView

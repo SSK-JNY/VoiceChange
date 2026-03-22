@@ -192,6 +192,11 @@ async def _handle_binary_message(
 
 
 def main() -> None:
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s - %(message)s",
+    )
     parser = argparse.ArgumentParser(description="VoiceChange WSL inference server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
