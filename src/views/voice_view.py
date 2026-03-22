@@ -46,6 +46,7 @@ class AudioView:
         # RVC関連変数
         self.rvc_enabled_var = tk.BooleanVar(value=False)
         self.rvc_fast_mode_var = tk.BooleanVar(value=False)  # デフォルトで高速モード無効
+        self.allow_dry_fallback_var = tk.BooleanVar(value=bool(self.gui_settings.allow_dry_fallback_on_rvc_fail))
         self.rvc_model_var = tk.StringVar()
         self.rvc_pitch_var = tk.IntVar(value=0)
 
@@ -452,6 +453,11 @@ class AudioView:
         ttk.Label(rvc_frame, text="高速モード:").grid(row=1, column=0, sticky="w")
         self.rvc_fast_mode_check = ttk.Checkbutton(rvc_frame, variable=self.rvc_fast_mode_var)
         self.rvc_fast_mode_check.grid(row=1, column=1, sticky="w", padx=5)
+
+        # RVC失敗時の原音フォールバック可否
+        ttk.Label(rvc_frame, text="RVC失敗時に原音を混ぜる:").grid(row=1, column=2, sticky="w", padx=(12, 0))
+        self.allow_dry_fallback_check = ttk.Checkbutton(rvc_frame, variable=self.allow_dry_fallback_var)
+        self.allow_dry_fallback_check.grid(row=1, column=3, sticky="w", padx=5)
 
         # RVCモデル選択
         ttk.Label(rvc_frame, text="モデル:").grid(row=2, column=0, sticky="w")

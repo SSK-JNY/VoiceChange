@@ -18,6 +18,7 @@
     "fast_mode_rpc_timeout_sec": 0.10,
     "fast_mode_rpc_bootstrap_timeout_sec": 0.35,
     "fast_mode_local_mix": 0.75,
+    "allow_dry_fallback_on_rvc_fail": true,
     "default_input_device": "",
     "default_output_device": "",
     "server_url": "ws://127.0.0.1:8765/ws",

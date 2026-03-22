@@ -67,6 +67,7 @@ class AudioController:
         # RVC関連イベント
         self.view.rvc_enabled_var.trace('w', self._on_rvc_enabled_change)
         self.view.rvc_fast_mode_var.trace('w', self._on_rvc_fast_mode_change)
+        self.view.allow_dry_fallback_var.trace('w', self._on_allow_dry_fallback_change)
         self.view.rvc_model_var.trace('w', self._on_rvc_model_change)
         self.view.rvc_pitch_var.trace('w', self._on_rvc_pitch_change)
 
@@ -88,6 +89,7 @@ class AudioController:
                 "stream_out_buf": "1.50",
                 "output_delay_ms": "150",
                 "rvc_fast_mode": False,
+                "allow_dry_fallback": False,
             }
         else:
             preset = {
@@ -101,6 +103,7 @@ class AudioController:
                 "stream_out_buf": "0.50",
                 "output_delay_ms": "0",
                 "rvc_fast_mode": True,
+                "allow_dry_fallback": True,
             }
 
         self.view.blocksize_var.set(preset["blocksize"])
@@ -113,6 +116,7 @@ class AudioController:
         self.view.stream_out_buf_var.set(preset["stream_out_buf"])
         self.view.output_delay_ms_var.set(preset["output_delay_ms"])
         self.view.rvc_fast_mode_var.set(preset["rvc_fast_mode"])
+        self.view.allow_dry_fallback_var.set(preset["allow_dry_fallback"])
 
         self._log_param_change("tuning_preset", "custom", preset_name, "preset")
         self.view.set_status(f"チューニングプリセットを適用: {preset_name}", "blue")
@@ -329,6 +333,14 @@ class AudioController:
         self._log_param_change("rvc_fast_mode", old, self.model.rvc_fast_mode)
         mode_text = "ON" if enabled else "OFF"
         self.view.set_status(f"RVC高速モード: {mode_text}", "blue" if enabled else "red")
+
+    def _on_allow_dry_fallback_change(self, *args):
+        """RVC失敗時の原音フォールバック可否変更時"""
+        allow = bool(self.view.allow_dry_fallback_var.get())
+        old = self.model.gui_settings.allow_dry_fallback_on_rvc_fail
+        self.model.gui_settings.allow_dry_fallback_on_rvc_fail = allow
+        self.model.set_strict_rvc_only(not allow)
+        self._log_param_change("allow_dry_fallback_on_rvc_fail", old, allow)
 
     def on_rvc_fast_mode_change(self):
         """RVC高速モード変更時 (Checkbutton用)"""

@@ -29,6 +29,7 @@ class GuiLocalSettings:
     fast_mode_rpc_timeout_sec: float = 0.12
     fast_mode_rpc_bootstrap_timeout_sec: float = 0.35
     fast_mode_local_mix: float = 0.35
+    allow_dry_fallback_on_rvc_fail: bool = True
 
     # GUIローカル状態
     default_input_device: str = ""
@@ -60,6 +61,7 @@ class GuiLocalSettings:
             fast_mode_rpc_timeout_sec=float(data.get("fast_mode_rpc_timeout_sec", 0.12)),
             fast_mode_rpc_bootstrap_timeout_sec=float(data.get("fast_mode_rpc_bootstrap_timeout_sec", 0.35)),
             fast_mode_local_mix=float(data.get("fast_mode_local_mix", 0.35)),
+            allow_dry_fallback_on_rvc_fail=bool(data.get("allow_dry_fallback_on_rvc_fail", True)),
             default_input_device=str(data.get("default_input_device", "")),
             default_output_device=str(data.get("default_output_device", "")),
             server_url=str(data.get("server_url", "ws://127.0.0.1:8765/ws")),

@@ -62,6 +62,7 @@ class AudioModel:
         self.rvc_model_name = self.inference_runtime_settings.model_name
         self.rvc_pitch_shift = self.inference_runtime_settings.pitch_shift
         self.rvc_fast_mode = False
+        self.strict_rvc_only = not bool(getattr(self.gui_settings, "allow_dry_fallback_on_rvc_fail", True))
 
         # RPC推論関連
         self.inference_client = None
@@ -71,6 +72,7 @@ class AudioModel:
         self._last_params_sync = 0.0
         self._fast_chunk_counter = 0
         self._fast_last_rpc_output: Optional[np.ndarray] = None
+        self._last_rvc_success_output: Optional[np.ndarray] = None
         self._fast_log_last_ts = 0.0
         self._last_stream_status_log_ts = 0.0
         
@@ -169,6 +171,10 @@ class AudioModel:
         self.rvc_fast_mode = bool(enabled)
         self._fast_chunk_counter = 0
         self._fast_last_rpc_output = None
+
+    def set_strict_rvc_only(self, enabled: bool):
+        """RVC失敗時に原音フォールバックを許可しないモードを設定する。"""
+        self.strict_rvc_only = bool(enabled)
 
     def set_rvc_pitch_shift(self, pitch_shift):
         """RVCピッチシフトを設定"""
@@ -328,8 +334,15 @@ class AudioModel:
                                 raise RuntimeError("rvc model is not selected")
                             processed_signal = self._apply_rvc_rpc(rvc_input)
                     except Exception as e:
-                        self.logger.warning("RVC RPC failed, fallback to local effect: %s", e)
-                        processed_signal = self._apply_pedalboard_effects(formant_processed)
+                        self.logger.warning("RVC RPC failed: %s", e)
+                        if self.strict_rvc_only:
+                            if self._last_rvc_success_output is not None:
+                                held = self._fit_audio_length(self._last_rvc_success_output, len(rvc_input))
+                                processed_signal = held.reshape(-1, 1)
+                            else:
+                                processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
+                        else:
+                            processed_signal = self._apply_pedalboard_effects(formant_processed)
                 else:
                     # 通常のエフェクト適用
                     processed_signal = self._apply_pedalboard_effects(formant_processed)
@@ -493,6 +506,7 @@ class AudioModel:
             converted = np.pad(converted, (0, len(audio) - len(converted)))
         elif len(converted) > len(audio):
             converted = converted[: len(audio)]
+        self._last_rvc_success_output = np.asarray(converted, dtype=np.float32)
         return converted.reshape(-1, 1)
 
     def _apply_rvc_hybrid_fast_mode(self, signal_in):
