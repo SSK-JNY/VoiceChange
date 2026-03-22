@@ -27,6 +27,7 @@ class AudioView:
         self.status_var = tk.StringVar(value="停止中")
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
+        self.tuning_preset_var = tk.StringVar(value="低遅延")
         self.blocksize_var = tk.StringVar(value=str(self.gui_settings.blocksize))
         self.rvc_timeout_var = tk.StringVar(value=f"{self.gui_settings.rvc_processing_timeout_sec:.2f}")
         self.fast_rpc_every_var = tk.StringVar(value=str(self.gui_settings.fast_mode_rpc_every_n_chunks))
@@ -346,7 +347,19 @@ class AudioView:
         tune_frame = ttk.LabelFrame(scrollable_frame, text="処理速度チューニング", padding=8)
         tune_frame.pack(fill="x", padx=10, pady=(5, 0))
 
-        ttk.Label(tune_frame, text="RVCタイムアウト(s):").grid(row=0, column=0, sticky="w")
+        ttk.Label(tune_frame, text="チューニングプリセット:").grid(row=0, column=0, sticky="w")
+        self.tuning_preset_combo = ttk.Combobox(
+            tune_frame,
+            textvariable=self.tuning_preset_var,
+            values=["低遅延", "完全変換"],
+            state="readonly",
+            width=12,
+        )
+        self.tuning_preset_combo.grid(row=0, column=1, sticky="w", padx=5)
+        self.apply_preset_button = ttk.Button(tune_frame, text="適用")
+        self.apply_preset_button.grid(row=0, column=2, sticky="w", padx=(12, 0))
+
+        ttk.Label(tune_frame, text="RVCタイムアウト(s):").grid(row=1, column=0, sticky="w")
         self.rvc_timeout_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.rvc_timeout_var,
@@ -354,9 +367,9 @@ class AudioView:
             state="readonly",
             width=10,
         )
-        self.rvc_timeout_combo.grid(row=0, column=1, sticky="w", padx=5)
+        self.rvc_timeout_combo.grid(row=1, column=1, sticky="w", padx=5)
 
-        ttk.Label(tune_frame, text="高速RPC間隔(チャンク):").grid(row=0, column=2, sticky="w", padx=(12, 0))
+        ttk.Label(tune_frame, text="高速RPC間隔(チャンク):").grid(row=1, column=2, sticky="w", padx=(12, 0))
         self.fast_rpc_every_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.fast_rpc_every_var,
@@ -364,9 +377,9 @@ class AudioView:
             state="readonly",
             width=8,
         )
-        self.fast_rpc_every_combo.grid(row=0, column=3, sticky="w", padx=5)
+        self.fast_rpc_every_combo.grid(row=1, column=3, sticky="w", padx=5)
 
-        ttk.Label(tune_frame, text="高速RPC timeout(s):").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(tune_frame, text="高速RPC timeout(s):").grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.fast_rpc_timeout_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.fast_rpc_timeout_var,
@@ -374,9 +387,9 @@ class AudioView:
             state="readonly",
             width=10,
         )
-        self.fast_rpc_timeout_combo.grid(row=1, column=1, sticky="w", padx=5, pady=(4, 0))
+        self.fast_rpc_timeout_combo.grid(row=2, column=1, sticky="w", padx=5, pady=(4, 0))
 
-        ttk.Label(tune_frame, text="初回RPC timeout(s):").grid(row=1, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        ttk.Label(tune_frame, text="初回RPC timeout(s):").grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
         self.fast_rpc_bootstrap_timeout_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.fast_rpc_bootstrap_timeout_var,
@@ -384,19 +397,19 @@ class AudioView:
             state="readonly",
             width=8,
         )
-        self.fast_rpc_bootstrap_timeout_combo.grid(row=1, column=3, sticky="w", padx=5, pady=(4, 0))
+        self.fast_rpc_bootstrap_timeout_combo.grid(row=2, column=3, sticky="w", padx=5, pady=(4, 0))
 
-        ttk.Label(tune_frame, text="ローカル混合比:").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(tune_frame, text="ローカル混合比:").grid(row=3, column=0, sticky="w", pady=(4, 0))
         self.fast_local_mix_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.fast_local_mix_var,
-            values=["0.05", "0.10", "0.15", "0.20", "0.25", "0.35", "0.50", "0.60", "0.70", "0.80", "0.90", "1.00"],
+            values=["0.00", "0.05", "0.10", "0.15", "0.20", "0.25", "0.35", "0.50", "0.60", "0.70", "0.80", "0.90", "1.00"],
             state="readonly",
             width=10,
         )
-        self.fast_local_mix_combo.grid(row=2, column=1, sticky="w", padx=5, pady=(4, 0))
+        self.fast_local_mix_combo.grid(row=3, column=1, sticky="w", padx=5, pady=(4, 0))
 
-        ttk.Label(tune_frame, text="入力バッファ(s):").grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        ttk.Label(tune_frame, text="入力バッファ(s):").grid(row=3, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
         self.stream_in_buf_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.stream_in_buf_var,
@@ -404,9 +417,9 @@ class AudioView:
             state="readonly",
             width=8,
         )
-        self.stream_in_buf_combo.grid(row=2, column=3, sticky="w", padx=5, pady=(4, 0))
+        self.stream_in_buf_combo.grid(row=3, column=3, sticky="w", padx=5, pady=(4, 0))
 
-        ttk.Label(tune_frame, text="出力バッファ(s):").grid(row=3, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        ttk.Label(tune_frame, text="出力バッファ(s):").grid(row=4, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
         self.stream_out_buf_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.stream_out_buf_var,
@@ -414,9 +427,9 @@ class AudioView:
             state="readonly",
             width=8,
         )
-        self.stream_out_buf_combo.grid(row=3, column=3, sticky="w", padx=5, pady=(4, 0))
+        self.stream_out_buf_combo.grid(row=4, column=3, sticky="w", padx=5, pady=(4, 0))
 
-        ttk.Label(tune_frame, text="出力遅延(ms):").grid(row=3, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(tune_frame, text="出力遅延(ms):").grid(row=4, column=0, sticky="w", pady=(4, 0))
         self.output_delay_ms_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.output_delay_ms_var,
@@ -424,7 +437,7 @@ class AudioView:
             state="readonly",
             width=10,
         )
-        self.output_delay_ms_combo.grid(row=3, column=1, sticky="w", padx=5, pady=(4, 0))
+        self.output_delay_ms_combo.grid(row=4, column=1, sticky="w", padx=5, pady=(4, 0))
 
         # RVC設定フレーム
         rvc_frame = ttk.LabelFrame(scrollable_frame, text="RVC設定 (AI音声変換)", padding=10)

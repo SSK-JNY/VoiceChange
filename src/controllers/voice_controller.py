@@ -48,6 +48,7 @@ class AudioController:
         self.view.start_button.config(command=self.start_stream)
         self.view.stop_button.config(command=self.stop_stream)
         self.view.passthrough_button.config(command=self.passthrough_stream)
+        self.view.apply_preset_button.config(command=self.apply_tuning_preset)
         self.view.pitch_var.trace('w', self._on_pitch_change)
         self.view.blocksize_var.trace('w', self._on_blocksize_change)
         self.view.rvc_timeout_var.trace('w', self._on_rvc_timeout_change)
@@ -71,6 +72,50 @@ class AudioController:
 
         # 推論サーバ接続ボタン
         self.view.connect_button.config(command=self.connect_to_server)
+
+    def apply_tuning_preset(self):
+        """処理チューニングのプリセットを一括適用する。"""
+        preset_name = self.view.tuning_preset_var.get().strip()
+        if preset_name == "完全変換":
+            preset = {
+                "blocksize": "8192",
+                "rvc_timeout": "0.40",
+                "fast_rpc_every": "1",
+                "fast_rpc_timeout": "0.30",
+                "fast_rpc_bootstrap_timeout": "0.70",
+                "fast_local_mix": "0.00",
+                "stream_in_buf": "1.50",
+                "stream_out_buf": "1.50",
+                "output_delay_ms": "150",
+                "rvc_fast_mode": False,
+            }
+        else:
+            preset = {
+                "blocksize": "1024",
+                "rvc_timeout": "0.18",
+                "fast_rpc_every": "6",
+                "fast_rpc_timeout": "0.08",
+                "fast_rpc_bootstrap_timeout": "0.35",
+                "fast_local_mix": "0.90",
+                "stream_in_buf": "0.50",
+                "stream_out_buf": "0.50",
+                "output_delay_ms": "0",
+                "rvc_fast_mode": True,
+            }
+
+        self.view.blocksize_var.set(preset["blocksize"])
+        self.view.rvc_timeout_var.set(preset["rvc_timeout"])
+        self.view.fast_rpc_every_var.set(preset["fast_rpc_every"])
+        self.view.fast_rpc_timeout_var.set(preset["fast_rpc_timeout"])
+        self.view.fast_rpc_bootstrap_timeout_var.set(preset["fast_rpc_bootstrap_timeout"])
+        self.view.fast_local_mix_var.set(preset["fast_local_mix"])
+        self.view.stream_in_buf_var.set(preset["stream_in_buf"])
+        self.view.stream_out_buf_var.set(preset["stream_out_buf"])
+        self.view.output_delay_ms_var.set(preset["output_delay_ms"])
+        self.view.rvc_fast_mode_var.set(preset["rvc_fast_mode"])
+
+        self._log_param_change("tuning_preset", "custom", preset_name, "preset")
+        self.view.set_status(f"チューニングプリセットを適用: {preset_name}", "blue")
 
     def _log_param_change(self, name: str, old_value, new_value, apply_timing: str = "immediate"):
         """UIからのパラメータ変更を時刻付きでログ出力する。"""
