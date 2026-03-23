@@ -17,7 +17,7 @@ from typing import Optional
 
 import librosa
 import numpy as np
-from pedalboard import Pedalboard, PitchShift
+from pedalboard import Chorus, Distortion, Pedalboard, PitchShift
 from scipy import signal
 import sounddevice as sd
 
@@ -56,6 +56,8 @@ class AudioModel:
         self.output_gain = self.gui_settings.initial_output_gain
         self.noise_gate_threshold = self.gui_settings.initial_noise_gate_threshold
         self.output_delay_ms = max(0.0, float(getattr(self.gui_settings, "output_delay_ms", 0.0)))
+        self.robot_distortion_drive_db = float(getattr(self.gui_settings, "robot_distortion_drive_db", 45.0))
+        self.robot_chorus_mix = float(getattr(self.gui_settings, "robot_chorus_mix", 0.9))
 
         # RVC設定
         self.rvc_enabled = False
@@ -118,7 +120,17 @@ class AudioModel:
     def _update_board(self):
         """Pedalboardを更新"""
         with self.lock:
-            self.board = Pedalboard([PitchShift(semitones=self.pitch_shift)])
+            self.board = Pedalboard([
+                PitchShift(semitones=self.pitch_shift),
+                Distortion(drive_db=self.robot_distortion_drive_db),
+                Chorus(
+                    rate_hz=1.6,
+                    depth=0.95,
+                    centre_delay_ms=14.0,
+                    feedback=0.60,
+                    mix=self.robot_chorus_mix,
+                ),
+            ])
     
     def set_pitch_shift(self, semitones):
         """ピッチシフトを設定"""
@@ -145,6 +157,16 @@ class AudioModel:
         """出力遅延(ms)を設定する。変更時は内部バッファをリセットする。"""
         self.output_delay_ms = max(0.0, float(delay_ms))
         self._output_delay_buffer = np.zeros(0, dtype=np.float32)
+
+    def set_robot_distortion_drive_db(self, drive_db: float):
+        """ロボット風ディストーション量(dB)を設定する。"""
+        self.robot_distortion_drive_db = float(min(60.0, max(0.0, drive_db)))
+        self._update_board()
+
+    def set_robot_chorus_mix(self, mix: float):
+        """ロボット風コーラス混合比(0..1)を設定する。"""
+        self.robot_chorus_mix = float(min(1.0, max(0.0, mix)))
+        self._update_board()
 
     def enable_rvc(self, enabled):
         """RVCを有効/無効化"""
@@ -637,14 +659,14 @@ class AudioModel:
             soft_region = (envelope >= knee_low) & (envelope < knee_high)
             low_region = envelope < knee_low
 
-            # ほぼ無音帯は強く減衰（残留ノイズを抑える）
-            gain[low_region] = 0.03
-            gain[hard_region] = 0.005
+            # ほぼ無音帯は完全ミュートして残留ノイズを抑える
+            gain[low_region] = 0.0
+            gain[hard_region] = 0.0
 
             # ニー帯は滑らかに遷移
             if np.any(soft_region):
                 t = (envelope[soft_region] - knee_low) / (knee_high - knee_low + 1e-12)
-                gain[soft_region] = 0.03 + (t * t) * 0.97
+                gain[soft_region] = (t * t)
 
             # ゲイン変化の平滑化（チャタリング抑制）
             gain_smooth_win = max(5, int(self.samplerate * 0.0015))

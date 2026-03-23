@@ -59,6 +59,8 @@ class AudioController:
         self.view.stream_in_buf_var.trace('w', self._on_stream_in_buf_change)
         self.view.stream_out_buf_var.trace('w', self._on_stream_out_buf_change)
         self.view.output_delay_ms_var.trace('w', self._on_output_delay_ms_change)
+        self.view.robot_distortion_drive_db_var.trace('w', self._on_robot_distortion_change)
+        self.view.robot_chorus_mix_var.trace('w', self._on_robot_chorus_mix_change)
         self.view.input_gain_var.trace('w', self._on_input_gain_change)
         self.view.output_gain_var.trace('w', self._on_output_gain_change)
         self.view.formant_var.trace('w', self._on_formant_change)
@@ -270,6 +272,32 @@ class AudioController:
         self.model.gui_settings.output_delay_ms = value
         self.model.set_output_delay_ms(value)
         self._log_param_change("output_delay_ms", old, value)
+
+    def _on_robot_distortion_change(self, *args):
+        """ロボット風ディストーション量変更時"""
+        raw = self.view.robot_distortion_drive_db_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        value = min(60.0, max(0.0, value))
+        old = float(getattr(self.model.gui_settings, "robot_distortion_drive_db", 45.0))
+        self.model.gui_settings.robot_distortion_drive_db = value
+        self.model.set_robot_distortion_drive_db(value)
+        self._log_param_change("robot_distortion_drive_db", old, value)
+
+    def _on_robot_chorus_mix_change(self, *args):
+        """ロボット風コーラス混合比変更時"""
+        raw = self.view.robot_chorus_mix_var.get().strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        value = min(1.0, max(0.0, value))
+        old = float(getattr(self.model.gui_settings, "robot_chorus_mix", 0.9))
+        self.model.gui_settings.robot_chorus_mix = value
+        self.model.set_robot_chorus_mix(value)
+        self._log_param_change("robot_chorus_mix", old, value)
     
     def _on_output_gain_change(self, *args):
         """出力ゲイン変更時"""

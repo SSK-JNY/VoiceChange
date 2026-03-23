@@ -5,7 +5,7 @@ CLI版: リアルタイムボイスチェンジャー
 import argparse
 import sounddevice as sd
 import numpy as np
-from pedalboard import Pedalboard, PitchShift
+from pedalboard import Chorus, Distortion, Pedalboard, PitchShift
 import time
 import pprint
 import sys
@@ -18,7 +18,15 @@ samplerate = config.SAMPLERATE
 blocksize = config.BLOCKSIZE
 
 board = Pedalboard([
-    PitchShift(semitones=config.INITIAL_PITCH_SHIFT)
+    PitchShift(semitones=config.INITIAL_PITCH_SHIFT),
+    Distortion(drive_db=45.0),
+    Chorus(
+        rate_hz=1.6,
+        depth=0.95,
+        centre_delay_ms=14.0,
+        feedback=0.60,
+        mix=0.90,
+    ),
 ])
 
 # グローバルモード設定

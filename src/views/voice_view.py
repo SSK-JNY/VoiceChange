@@ -37,6 +37,8 @@ class AudioView:
         self.stream_in_buf_var = tk.StringVar(value=f"{self.gui_settings.stream_input_buffer_seconds:.2f}")
         self.stream_out_buf_var = tk.StringVar(value=f"{self.gui_settings.stream_output_buffer_seconds:.2f}")
         self.output_delay_ms_var = tk.StringVar(value=f"{self.gui_settings.output_delay_ms:.0f}")
+        self.robot_distortion_drive_db_var = tk.StringVar(value=f"{float(getattr(self.gui_settings, 'robot_distortion_drive_db', 45.0)):.0f}")
+        self.robot_chorus_mix_var = tk.StringVar(value=f"{float(getattr(self.gui_settings, 'robot_chorus_mix', 0.9)):.2f}")
         self.pitch_var = tk.IntVar(value=self.gui_settings.initial_pitch_shift)
         self.input_gain_var = tk.DoubleVar(value=self.gui_settings.initial_input_gain)
         self.output_gain_var = tk.DoubleVar(value=self.gui_settings.initial_output_gain)
@@ -314,6 +316,26 @@ class AudioView:
             variable=self.noise_gate_var
         )
         noise_gate_slider.grid(row=4, column=1, sticky="ew", padx=5)
+
+        ttk.Label(effect_frame, text="ロボ歪み(dB):").grid(row=5, column=0, sticky="w")
+        self.robot_distortion_combo = ttk.Combobox(
+            effect_frame,
+            textvariable=self.robot_distortion_drive_db_var,
+            values=["0", "8", "16", "24", "32", "40", "45", "50", "60"],
+            state="readonly",
+            width=12,
+        )
+        self.robot_distortion_combo.grid(row=5, column=1, sticky="w", padx=5, pady=(4, 0))
+
+        ttk.Label(effect_frame, text="ロボコーラスmix:").grid(row=5, column=2, sticky="w")
+        self.robot_chorus_mix_combo = ttk.Combobox(
+            effect_frame,
+            textvariable=self.robot_chorus_mix_var,
+            values=["0.00", "0.10", "0.20", "0.30", "0.40", "0.50", "0.60", "0.70", "0.80", "0.90", "1.00"],
+            state="readonly",
+            width=12,
+        )
+        self.robot_chorus_mix_combo.grid(row=5, column=3, sticky="w", padx=5, pady=(4, 0))
         
         effect_frame.columnconfigure(1, weight=1)
 

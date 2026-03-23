@@ -177,6 +177,24 @@ WSL bash 版:
    - 高速モード時のローカル高速変換の混合比 (0.0〜1.0)
    - 既定値: 0.35
 
+### ロボ化エフェクト（Distortion / Chorus）
+
+- 処理位置
+   - ロボ化はクライアント側（GUI側）の Pedalboard で処理されます
+   - サーバ側は RVC 推論のみを担当します
+
+- GUI から変更できる項目
+   - `robot_distortion_drive_db`（ロボ歪み dB）
+   - `robot_chorus_mix`（ロボコーラス mix, 0.0〜1.0）
+
+- 設定ファイル
+   - `gui_local_settings.json` に保存されます
+
+- 音作りの目安
+   - ロボ感を強める: `robot_distortion_drive_db` を上げる / `robot_chorus_mix` を上げる
+   - 聞きやすくする: `robot_distortion_drive_db` を下げる / `robot_chorus_mix` を下げる
+   - 目安例（極端）: `robot_distortion_drive_db=45`, `robot_chorus_mix=0.90`
+
 ### フェーズ6検証スクリプト
 
 scripts/smoke_test_phase6_validation.py は以下の環境変数で閾値上書き可能です。
