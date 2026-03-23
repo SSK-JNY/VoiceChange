@@ -210,7 +210,7 @@
 ```text
 VoiceChange/
 ├── docs/
-│   ├── CURRENT_ISSUES.md
+│   ├── current-issues.md
 │   ├── ARCHITECTURE.md
 │   └── RPC_PROTOCOL.md
 ├── gui.py

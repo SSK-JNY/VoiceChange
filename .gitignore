@@ -39,6 +39,8 @@ env/
 *.mp3
 .env
 local_settings.py
+scripts/*.log
+scripts/validate-public-push.ps1
 
 # Testing
 .pytest_cache/
