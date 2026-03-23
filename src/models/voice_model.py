@@ -56,8 +56,8 @@ class AudioModel:
         self.output_gain = self.gui_settings.initial_output_gain
         self.noise_gate_threshold = self.gui_settings.initial_noise_gate_threshold
         self.output_delay_ms = max(0.0, float(getattr(self.gui_settings, "output_delay_ms", 0.0)))
-        self.robot_distortion_drive_db = float(getattr(self.gui_settings, "robot_distortion_drive_db", 45.0))
-        self.robot_chorus_mix = float(getattr(self.gui_settings, "robot_chorus_mix", 0.9))
+        self.robot_distortion_drive_db = float(getattr(self.gui_settings, "robot_distortion_drive_db", 0.0))
+        self.robot_chorus_mix = float(getattr(self.gui_settings, "robot_chorus_mix", 0.0))
 
         # RVC設定
         self.rvc_enabled = False
@@ -677,10 +677,11 @@ class AudioModel:
             # RMS と ピーク の大きい方でゲート判定（子音でもどちらかが閾値を超えればゲートを開く）
             envelope = np.maximum(rms_envelope, peak_envelope)
 
-            # ヒステリシス付きソフトゲート（途切れ抑制）
-            floor_gain = 0.02
-            close_th = threshold * 0.75
-            open_th = threshold * 1.15
+            # ヒステリシス付きソフトゲート（語尾保護寄り）
+            # 閉じる閾値を下げ、完全に閉じ切らないことで語尾の母音が潰れにくくなる。
+            floor_gain = 0.05
+            close_th = threshold * 0.55
+            open_th = threshold * 1.05
             target_gain = np.ones_like(signal_1d, dtype=np.float32)
 
             low_region = envelope <= close_th
@@ -690,11 +691,18 @@ class AudioModel:
                 t = (envelope[mid_region] - close_th) / (open_th - close_th + 1e-12)
                 target_gain[mid_region] = floor_gain + (t * t) * (1.0 - floor_gain)
 
-            # アタック/リリースで時間方向を平滑化（高閾値でも語尾切れを抑える）
+            # ごく弱い語尾も一気に落とさず、薄く残す。
+            tail_region = (envelope > (close_th * 0.45)) & (envelope < close_th)
+            if np.any(tail_region):
+                t_tail = (envelope[tail_region] - (close_th * 0.45)) / (close_th * 0.55 + 1e-12)
+                tail_floor = 0.12 + 0.18 * np.clip(t_tail, 0.0, 1.0)
+                target_gain[tail_region] = np.maximum(target_gain[tail_region], tail_floor)
+
+            # アタック/リリースで時間方向を平滑化（語尾の減衰を長めに保持）
             attack_samples = max(1.0, self.samplerate * 0.002)
-            release_samples = max(1.0, self.samplerate * 0.040)
-            # ホールド: ゲートが開いたら最低 120ms は閉じない（子音の過渡成分保護）
-            hold_len = int(self.samplerate * 0.120)
+            release_samples = max(1.0, self.samplerate * 0.090)
+            # ホールド: ゲートが開いたら最低 180ms は閉じない（語尾と子音の過渡成分保護）
+            hold_len = int(self.samplerate * 0.180)
             attack_alpha = float(np.exp(-1.0 / attack_samples))
             release_alpha = float(np.exp(-1.0 / release_samples))
 
@@ -705,9 +713,9 @@ class AudioModel:
                 # ゲートが開いたらホールドカウンタをリセット
                 if tg >= 0.5:
                     hold_remaining = hold_len
-                # ホールド中は target を強制オープン
+                # ホールド中は target を十分高く保つ
                 if hold_remaining > 0:
-                    tg = 1.0
+                    tg = max(float(tg), 0.85)
                     hold_remaining -= 1
                 alpha = attack_alpha if tg > g else release_alpha
                 g = alpha * g + (1.0 - alpha) * float(tg)

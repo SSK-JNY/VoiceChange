@@ -24,8 +24,8 @@ class GuiLocalSettings:
     stream_input_buffer_seconds: float = 0.5
     stream_output_buffer_seconds: float = 0.5
     output_delay_ms: float = 0.0
-    robot_distortion_drive_db: float = 45.0
-    robot_chorus_mix: float = 0.9
+    robot_distortion_drive_db: float = 0.0
+    robot_chorus_mix: float = 0.0
     # 高速モードの挙動調整
     fast_mode_rpc_every_n_chunks: int = 3
     fast_mode_rpc_timeout_sec: float = 0.12
@@ -59,8 +59,8 @@ class GuiLocalSettings:
             stream_input_buffer_seconds=float(data.get("stream_input_buffer_seconds", 0.5)),
             stream_output_buffer_seconds=float(data.get("stream_output_buffer_seconds", 0.5)),
             output_delay_ms=float(data.get("output_delay_ms", 0.0)),
-            robot_distortion_drive_db=float(data.get("robot_distortion_drive_db", 45.0)),
-            robot_chorus_mix=float(data.get("robot_chorus_mix", 0.9)),
+            robot_distortion_drive_db=float(data.get("robot_distortion_drive_db", 0.0)),
+            robot_chorus_mix=float(data.get("robot_chorus_mix", 0.0)),
             fast_mode_rpc_every_n_chunks=int(data.get("fast_mode_rpc_every_n_chunks", 3)),
             fast_mode_rpc_timeout_sec=float(data.get("fast_mode_rpc_timeout_sec", 0.12)),
             fast_mode_rpc_bootstrap_timeout_sec=float(data.get("fast_mode_rpc_bootstrap_timeout_sec", 0.35)),

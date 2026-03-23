@@ -281,7 +281,7 @@ class AudioController:
         except ValueError:
             return
         value = min(60.0, max(0.0, value))
-        old = float(getattr(self.model.gui_settings, "robot_distortion_drive_db", 45.0))
+        old = float(getattr(self.model.gui_settings, "robot_distortion_drive_db", 0.0))
         self.model.gui_settings.robot_distortion_drive_db = value
         self.model.set_robot_distortion_drive_db(value)
         self._log_param_change("robot_distortion_drive_db", old, value)
@@ -294,7 +294,7 @@ class AudioController:
         except ValueError:
             return
         value = min(1.0, max(0.0, value))
-        old = float(getattr(self.model.gui_settings, "robot_chorus_mix", 0.9))
+        old = float(getattr(self.model.gui_settings, "robot_chorus_mix", 0.0))
         self.model.gui_settings.robot_chorus_mix = value
         self.model.set_robot_chorus_mix(value)
         self._log_param_change("robot_chorus_mix", old, value)
