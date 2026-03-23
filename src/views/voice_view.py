@@ -386,7 +386,7 @@ class AudioView:
         self.rvc_timeout_combo = ttk.Combobox(
             tune_frame,
             textvariable=self.rvc_timeout_var,
-            values=["0.08", "0.12", "0.18", "0.25", "0.30", "0.40"],
+            values=["0.08", "0.12", "0.18", "0.25", "0.30", "0.40", "0.60", "0.80", "0.90", "1.00", "1.20"],
             state="readonly",
             width=10,
         )
