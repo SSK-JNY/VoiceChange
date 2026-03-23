@@ -52,5 +52,6 @@ Thumbs.db
 src/models/rvc/*.pt
 src/models/rvc/*.pth
 src/models/rvc/*.json
+src/models/rvc/*.index
 
 test/*json
