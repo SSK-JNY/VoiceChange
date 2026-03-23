@@ -616,79 +616,96 @@ class AudioModel:
             self.logger.warning("update_params failed")
     
     def _apply_noise_reduction(self, indata):
-        """スペクトル領域でのノイズ除去（Spectral Subtraction）"""
+        """ノイズゲート相当の減衰を適用して静音帯のノイズを抑える。"""
         try:
-            from scipy.fft import fft, ifft
-            
-            # 単一チャンネル処理
-            signal_1d = indata[:, 0]
-            
-            # FFT計算（周波数領域へ）
-            X = fft(signal_1d)
-            magnitude = np.abs(X)
-            phase = np.angle(X)
-            
-            # パワースペクトラムに変換
-            power = magnitude ** 2
-            
-            # 閾値を線形値に変換 (dB → 線形)
-            threshold_linear = 10 ** (self.noise_gate_threshold / 10)
-            
-            # パワーが閾値以下の周波数成分を減衰
-            # Spectral Subtraction: ノイズスペクトラムを推定して差し引く
-            noise_power = np.where(power < threshold_linear, power * 0.1, 0)  # ノイズ部分を推定
-            subtracted_power = np.maximum(power - noise_power, power * 0.001)  # 下限を設定
-            
-            # 新しいマグニチュードを計算
-            magnitude_new = np.sqrt(subtracted_power)
-            
-            # 位相は保持して復元
-            X_denoised = magnitude_new * np.exp(1j * phase)
-            
-            # 逆FFT（時間領域へ）
-            result = np.real(ifft(X_denoised))
-            
-            return result.reshape(-1, 1)
+            signal_1d = np.asarray(indata[:, 0], dtype=np.float32)
+
+            # 閾値は dBFS の絶対レベルとして扱う（-80 ～ -20 dB）
+            threshold = max(1e-6, 10 ** (self.noise_gate_threshold / 20.0))
+
+            # 短時間エネルギー包絡を使ってゲート判定を安定化
+            env_win = max(8, int(self.samplerate * 0.005))
+            env_kernel = np.ones(env_win, dtype=np.float32) / float(env_win)
+            envelope = np.sqrt(np.convolve(signal_1d * signal_1d, env_kernel, mode="same") + 1e-12)
+
+            # ソフトニー + ハードゲート
+            knee_low = threshold * 0.7
+            knee_high = threshold * 1.6
+            gain = np.ones_like(signal_1d, dtype=np.float32)
+
+            hard_region = envelope < (threshold * 0.45)
+            soft_region = (envelope >= knee_low) & (envelope < knee_high)
+            low_region = envelope < knee_low
+
+            # ほぼ無音帯は強く減衰（残留ノイズを抑える）
+            gain[low_region] = 0.03
+            gain[hard_region] = 0.005
+
+            # ニー帯は滑らかに遷移
+            if np.any(soft_region):
+                t = (envelope[soft_region] - knee_low) / (knee_high - knee_low + 1e-12)
+                gain[soft_region] = 0.03 + (t * t) * 0.97
+
+            # ゲイン変化の平滑化（チャタリング抑制）
+            gain_smooth_win = max(5, int(self.samplerate * 0.0015))
+            smooth = np.ones(gain_smooth_win, dtype=np.float32) / float(gain_smooth_win)
+            gain = np.convolve(gain, smooth, mode="same")
+
+            gated = signal_1d * gain
+            return gated.reshape(-1, 1)
         except Exception as e:
             # エラーが発生した場合は無処理で返す
             print(f"Noise reduction error: {e}")
             return indata
     
     def _apply_formant(self, indata):
-        """フォルマント処理を適用（周波数領域での周波数特性調整）"""
+        """フォルマント感を強めるための帯域シェルフ補正を適用する。"""
         try:
             from scipy.fft import fft, ifft
-            
+
+            signal_1d = np.asarray(indata[:, 0], dtype=np.float32)
+            src_rms = float(np.sqrt(np.mean(signal_1d * signal_1d) + 1e-12))
+
             # FFT計算（周波数領域へ）
-            X = fft(indata[:, 0])
-            freqs = np.fft.fftfreq(len(indata), 1 / self.samplerate)
+            X = fft(signal_1d)
+            freqs = np.fft.fftfreq(len(signal_1d), 1 / self.samplerate)
             freqs_abs = np.abs(freqs)
-            
-            # formant_shift に基づいてゲイン調整（-24～+12）
-            shift_factor = self.formant_shift / 24.0  # -1.0 to +0.5
-            
-            # 低周波（Bass）と高周波（Treble）のゲイン
-            bass_gain = np.power(10, -shift_factor * 2.0 / 20)  # -24 で +2dB, +12 で -1dB
-            treble_gain = np.power(10, shift_factor * 3.0 / 20)  # -24 で -3dB, +12 で +1.5dB
-            
-            # 周波数帯別にゲインを適用（マルチバンドEQ）
-            # 低域: 0-300Hz, 中低域: 300-1000Hz, 中高域: 1000-4000Hz, 高域: 4000Hz以上
+
+            # -24..+12 を -1.0..+1.0 に正規化（+側の変化を強める）
+            shift_norm = float(np.clip(self.formant_shift / 12.0, -1.0, 1.0))
+
+            # 体感差を出すため、帯域ごとのゲイン幅を拡大
+            low_db = -8.0 * shift_norm
+            presence_db = 10.0 * shift_norm
+            air_db = 6.0 * shift_norm
+
+            low_gain = 10 ** (low_db / 20.0)
+            presence_gain = 10 ** (presence_db / 20.0)
+            air_gain = 10 ** (air_db / 20.0)
+
             mask = np.ones_like(freqs_abs)
-            
-            # 低域強調（formant_shift < 0 の時）
-            mask = np.where(freqs_abs < 300, bass_gain, mask)
-            
-            # 中域は段階的に遷移
-            mask = np.where((freqs_abs >= 300) & (freqs_abs < 1000),
-                          bass_gain + (1.0 - bass_gain) * (freqs_abs - 300) / 700, mask)
-            
-            # 高域強調（formant_shift > 0 の時）
-            mask = np.where(freqs_abs >= 4000, treble_gain, mask)
-            
+
+            # Low shelf: < 350Hz full, 350-1200Hz transition
+            mask = np.where(freqs_abs < 350.0, low_gain, mask)
+            low_t = np.clip((freqs_abs - 350.0) / (1200.0 - 350.0), 0.0, 1.0)
+            low_interp = low_gain + (1.0 - low_gain) * low_t
+            mask = np.where((freqs_abs >= 350.0) & (freqs_abs < 1200.0), low_interp, mask)
+
+            # Presence boost/cut: 1.2k-4.5kHz
+            mask = np.where((freqs_abs >= 1200.0) & (freqs_abs <= 4500.0), mask * presence_gain, mask)
+
+            # Air shelf: > 6kHz
+            mask = np.where(freqs_abs >= 6000.0, mask * air_gain, mask)
+
             # マスクを適用して逆FFT
             X_modified = X * mask
-            result = np.real(ifft(X_modified))
-            
+            result = np.real(ifft(X_modified)).astype(np.float32, copy=False)
+
+            # 出力レベルを揃えて比較しやすくする
+            out_rms = float(np.sqrt(np.mean(result * result) + 1e-12))
+            if out_rms > 1e-8:
+                result = result * min(2.0, src_rms / out_rms)
+
             return result.reshape(-1, 1)
         except Exception as e:
             # エラーが発生した場合は無処理で返す
