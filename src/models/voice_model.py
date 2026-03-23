@@ -84,6 +84,7 @@ class AudioModel:
             "input_gain_ms": [],
             "noise_reduce_ms": [],
             "formant_ms": [],
+            "post_formant_suppress_ms": [],
             "rvc_ms": [],
             "pedalboard_ms": [],
             "output_gain_ms": [],
@@ -92,6 +93,9 @@ class AudioModel:
         }
         self._max_stats_samples = 100  # 直近100フレームを保持
         self._output_delay_buffer = np.zeros(0, dtype=np.float32)
+
+        self._noise_gate_last_gain = 1.0
+        self._noise_gate_hold_samples_remaining = 0  # ホールド残サンプル数
 
         # デバイス情報
         self.devices = sd.query_devices()
@@ -332,7 +336,9 @@ class AudioModel:
                 outdata[:] = delayed
             
             else:  # normal
-                # 通常: Pedalboard エフェクト適用（入力ゲイン→ノイズ除去→フォルマント→Pedalboard→出力ゲイン）
+                # 通常: 入力ゲイン→ノイズ除去→(RVC)→フォルマント→Pedalboard→出力ゲイン
+                # RVC 有効時にフォルマント加工済み音声を先に食わせると、母音が誤認されやすい。
+                # そのため RVC へはノイズ除去後の比較的素の音声を渡し、質感加工は後段で行う。
                 t0 = time.perf_counter()
                 signal_in = indata * self.input_gain
                 self._record_timing("input_gain_ms", t0)
@@ -342,47 +348,57 @@ class AudioModel:
                 noise_reduced = self._apply_noise_reduction(signal_in)
                 self._record_timing("noise_reduce_ms", t1)
                 
-                # フォルマント処理を適用
-                t2 = time.perf_counter()
-                if abs(self.formant_shift) > 0.5:
-                    formant_processed = self._apply_formant(noise_reduced)
-                else:
-                    formant_processed = noise_reduced
-                self._record_timing("formant_ms", t2)
-                
                 # RVC/エフェクト適用
                 t3 = time.perf_counter()
                 if self.rvc_enabled:
                     if self.rvc_model_name or self.rvc_fast_mode:
-                        rvc_input = formant_processed if abs(self.formant_shift) > 0.5 else noise_reduced
+                        rvc_input = noise_reduced
                         try:
                             if self.rvc_fast_mode:
-                                processed_signal = self._apply_rvc_hybrid_fast_mode(rvc_input)
+                                core_processed = self._apply_rvc_hybrid_fast_mode(rvc_input)
                             else:
                                 if not self.rvc_model_name:
                                     raise RuntimeError("rvc model is not selected")
-                                processed_signal = self._apply_rvc_rpc(rvc_input)
+                                core_processed = self._apply_rvc_rpc(rvc_input)
                         except Exception as e:
                             self.logger.warning("RVC RPC failed: %s", e)
                             held = self._get_held_rvc_output(len(rvc_input))
                             if held is not None:
-                                processed_signal = held.reshape(-1, 1)
+                                core_processed = held.reshape(-1, 1)
                             elif self.strict_rvc_only:
-                                processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
+                                core_processed = np.zeros_like(noise_reduced, dtype=np.float32)
                             else:
-                                processed_signal = self._apply_pedalboard_effects(formant_processed)
+                                core_processed = noise_reduced
                     else:
-                        held = self._get_held_rvc_output(len(formant_processed))
+                        held = self._get_held_rvc_output(len(noise_reduced))
                         if held is not None:
-                            processed_signal = held.reshape(-1, 1)
+                            core_processed = held.reshape(-1, 1)
                         elif self.strict_rvc_only:
-                            processed_signal = np.zeros_like(formant_processed, dtype=np.float32)
+                            core_processed = np.zeros_like(noise_reduced, dtype=np.float32)
                         else:
-                            processed_signal = self._apply_pedalboard_effects(formant_processed)
+                            core_processed = noise_reduced
                 else:
-                    # 通常のエフェクト適用
-                    processed_signal = self._apply_pedalboard_effects(formant_processed)
+                    core_processed = noise_reduced
                 self._record_timing("rvc_ms", t3)
+
+                # フォルマント処理を適用
+                t2 = time.perf_counter()
+                if abs(self.formant_shift) > 0.5:
+                    formant_processed = self._apply_formant(core_processed)
+                else:
+                    formant_processed = core_processed
+                self._record_timing("formant_ms", t2)
+
+                # フォルマント後のノイズサプレッション（軽い抑制）
+                t2b = time.perf_counter()
+                if abs(self.formant_shift) > 0.5:
+                    post_formant_processed = self._apply_post_formant_noise_suppression(formant_processed)
+                else:
+                    post_formant_processed = formant_processed
+                self._record_timing("post_formant_suppress_ms", t2b)
+
+                # 通常のエフェクト適用
+                processed_signal = self._apply_pedalboard_effects(post_formant_processed)
 
                 # Pedalboard（コールバック内で即座に実行されるエフェクト）
                 t4 = time.perf_counter()
@@ -476,6 +492,7 @@ class AudioModel:
             f"Gain={avg_ms('input_gain_ms'):.2f}ms "
             f"NR={avg_ms('noise_reduce_ms'):.2f}ms "
             f"Formant={avg_ms('formant_ms'):.2f}ms "
+            f"SupprPost={avg_ms('post_formant_suppress_ms'):.2f}ms "
             f"RVC={avg_ms('rvc_ms'):.2f}ms "
             f"Pedalboard={avg_ms('pedalboard_ms'):.2f}ms | "
             f"StatusErrors={status_count}"
@@ -508,6 +525,7 @@ class AudioModel:
             "input_gain_ms": avg_ms("input_gain_ms"),
             "noise_reduce_ms": avg_ms("noise_reduce_ms"),
             "formant_ms": avg_ms("formant_ms"),
+            "post_formant_suppress_ms": avg_ms("post_formant_suppress_ms"),
             "rvc_ms": avg_ms("rvc_ms"),
             "pedalboard_ms": avg_ms("pedalboard_ms"),
             "output_gain_ms": avg_ms("output_gain_ms"),
@@ -646,32 +664,56 @@ class AudioModel:
             threshold = max(1e-6, 10 ** (self.noise_gate_threshold / 20.0))
 
             # 短時間エネルギー包絡を使ってゲート判定を安定化
-            env_win = max(8, int(self.samplerate * 0.005))
+            env_win = max(8, int(self.samplerate * 0.004))
             env_kernel = np.ones(env_win, dtype=np.float32) / float(env_win)
-            envelope = np.sqrt(np.convolve(signal_1d * signal_1d, env_kernel, mode="same") + 1e-12)
+            rms_envelope = np.sqrt(np.convolve(signal_1d * signal_1d, env_kernel, mode="same") + 1e-12)
 
-            # ソフトニー + ハードゲート
-            knee_low = threshold * 0.7
-            knee_high = threshold * 1.6
-            gain = np.ones_like(signal_1d, dtype=np.float32)
+            # ピーク包絡（1ms窓最大値）: 破裂音・摩擦音の短い過渡成分を検出
+            peak_win = max(4, int(self.samplerate * 0.001))
+            abs_signal = np.abs(signal_1d)
+            peak_kernel = np.ones(peak_win, dtype=np.float32) / float(peak_win)
+            peak_envelope = np.convolve(abs_signal, peak_kernel, mode="same")
 
-            hard_region = envelope < (threshold * 0.45)
-            soft_region = (envelope >= knee_low) & (envelope < knee_high)
-            low_region = envelope < knee_low
+            # RMS と ピーク の大きい方でゲート判定（子音でもどちらかが閾値を超えればゲートを開く）
+            envelope = np.maximum(rms_envelope, peak_envelope)
 
-            # ほぼ無音帯は完全ミュートして残留ノイズを抑える
-            gain[low_region] = 0.0
-            gain[hard_region] = 0.0
+            # ヒステリシス付きソフトゲート（途切れ抑制）
+            floor_gain = 0.02
+            close_th = threshold * 0.75
+            open_th = threshold * 1.15
+            target_gain = np.ones_like(signal_1d, dtype=np.float32)
 
-            # ニー帯は滑らかに遷移
-            if np.any(soft_region):
-                t = (envelope[soft_region] - knee_low) / (knee_high - knee_low + 1e-12)
-                gain[soft_region] = (t * t)
+            low_region = envelope <= close_th
+            mid_region = (envelope > close_th) & (envelope < open_th)
+            target_gain[low_region] = floor_gain
+            if np.any(mid_region):
+                t = (envelope[mid_region] - close_th) / (open_th - close_th + 1e-12)
+                target_gain[mid_region] = floor_gain + (t * t) * (1.0 - floor_gain)
 
-            # ゲイン変化の平滑化（チャタリング抑制）
-            gain_smooth_win = max(5, int(self.samplerate * 0.0015))
-            smooth = np.ones(gain_smooth_win, dtype=np.float32) / float(gain_smooth_win)
-            gain = np.convolve(gain, smooth, mode="same")
+            # アタック/リリースで時間方向を平滑化（高閾値でも語尾切れを抑える）
+            attack_samples = max(1.0, self.samplerate * 0.002)
+            release_samples = max(1.0, self.samplerate * 0.040)
+            # ホールド: ゲートが開いたら最低 120ms は閉じない（子音の過渡成分保護）
+            hold_len = int(self.samplerate * 0.120)
+            attack_alpha = float(np.exp(-1.0 / attack_samples))
+            release_alpha = float(np.exp(-1.0 / release_samples))
+
+            gain = np.empty_like(target_gain)
+            g = float(self._noise_gate_last_gain)
+            hold_remaining = int(self._noise_gate_hold_samples_remaining)
+            for i, tg in enumerate(target_gain):
+                # ゲートが開いたらホールドカウンタをリセット
+                if tg >= 0.5:
+                    hold_remaining = hold_len
+                # ホールド中は target を強制オープン
+                if hold_remaining > 0:
+                    tg = 1.0
+                    hold_remaining -= 1
+                alpha = attack_alpha if tg > g else release_alpha
+                g = alpha * g + (1.0 - alpha) * float(tg)
+                gain[i] = g
+            self._noise_gate_last_gain = float(g)
+            self._noise_gate_hold_samples_remaining = hold_remaining
 
             gated = signal_1d * gain
             return gated.reshape(-1, 1)
@@ -696,9 +738,11 @@ class AudioModel:
             # -24..+12 を -1.0..+1.0 に正規化（+側の変化を強める）
             shift_norm = float(np.clip(self.formant_shift / 12.0, -1.0, 1.0))
 
-            # 体感差を出すため、帯域ごとのゲイン幅を拡大
+            # 体感差を出すため、帯域ごとのゲイン幅を設定
+            # 注意: presence band 開始を2kHzに上げて日本語母音の混濁を防ぐ
+            # （えのF2=1700Hz, おのF2=800Hz が presence band に入らないようにする）
             low_db = -8.0 * shift_norm
-            presence_db = 10.0 * shift_norm
+            presence_db = 7.0 * shift_norm   # 10dB→7dBに抑えて母音誤認を軽減
             air_db = 6.0 * shift_norm
 
             low_gain = 10 ** (low_db / 20.0)
@@ -708,13 +752,17 @@ class AudioModel:
             mask = np.ones_like(freqs_abs)
 
             # Low shelf: < 350Hz full, 350-1200Hz transition
-            mask = np.where(freqs_abs < 350.0, low_gain, mask)
-            low_t = np.clip((freqs_abs - 350.0) / (1200.0 - 350.0), 0.0, 1.0)
+            # Low shelf: < 150Hz full, 150-650Hz transition
+            # 遷移域を 650Hz で打ち切り、おのF2(800Hz)を減衰させない
+            # （800Hz への影響が え(F2=1700Hz) との混濁の主因）
+            mask = np.where(freqs_abs < 150.0, low_gain, mask)
+            low_t = np.clip((freqs_abs - 150.0) / (650.0 - 150.0), 0.0, 1.0)
             low_interp = low_gain + (1.0 - low_gain) * low_t
-            mask = np.where((freqs_abs >= 350.0) & (freqs_abs < 1200.0), low_interp, mask)
+            mask = np.where((freqs_abs >= 150.0) & (freqs_abs < 650.0), low_interp, mask)
+            # 650Hz 以上は low shelf の影響なし（日本語母音F2をすべて保護）
 
-            # Presence boost/cut: 1.2k-4.5kHz
-            mask = np.where((freqs_abs >= 1200.0) & (freqs_abs <= 4500.0), mask * presence_gain, mask)
+            # Presence boost/cut: 2.0k-5.0kHz
+            mask = np.where((freqs_abs >= 2000.0) & (freqs_abs <= 5000.0), mask * presence_gain, mask)
 
             # Air shelf: > 6kHz
             mask = np.where(freqs_abs >= 6000.0, mask * air_gain, mask)
@@ -732,6 +780,61 @@ class AudioModel:
         except Exception as e:
             # エラーが発生した場合は無処理で返す
             print(f"Formant processing error: {e}")
+            return indata
+    
+    def _apply_post_formant_noise_suppression(self, indata):
+        """フォルマント後の軽いノイズサプレッション（スペクトラルサブトラクション）。
+        
+        フォルマント処理で周波数帯域を増幅する際に、背景ノイズも一緒に増幅されるため、
+        その後に軽いノイズを抑制する。
+        """
+        try:
+            from scipy.fft import fft, ifft
+
+            signal_1d = np.asarray(indata[:, 0], dtype=np.float32)
+
+            # FFT計算
+            X = fft(signal_1d)
+            freqs = np.fft.fftfreq(len(signal_1d), 1 / self.samplerate)
+            freqs_abs = np.abs(freqs)
+
+            # 周波数領域でノイズスペクトラムを推定
+            # 低周波と高周波はノイズが多いと仮定し、軽く減衰させる
+            X_mag = np.abs(X)
+            X_phase = np.angle(X)
+
+            # ノイズゲートしきい値（フォルマント処理前のノイズゲートから推定）
+            noise_floor = max(1e-6, 10 ** ((self.noise_gate_threshold - 15) / 20.0))
+
+            # 軽いスペクトラルサブトラクション: ノイズフロアの10%を差し引く
+            suppression_factor = 0.1
+            X_mag_suppressed = np.maximum(X_mag - (noise_floor * suppression_factor), X_mag * 0.95)
+
+            # ノイズが多い帯域（0-300Hzと高周波）をさらに軽く抑制
+            low_suppress = 0.98  # 低周波: 2%減衰
+            high_suppress = 0.97  # 高周波: 3%減衰
+
+            # 低周波（0-300Hz）
+            low_mask = np.ones_like(freqs_abs)
+            low_mask = np.where(freqs_abs <= 300.0, low_suppress, low_mask)
+
+            # 高周波（9kHz以上）
+            high_mask = np.ones_like(freqs_abs)
+            high_mask = np.where(freqs_abs >= 9000.0, high_suppress, high_mask)
+
+            # マスク適用
+            X_mag_suppressed = X_mag_suppressed * low_mask * high_mask
+
+            # 位相を保持して複素数に変換
+            X_suppressed = X_mag_suppressed * np.exp(1j * X_phase)
+
+            # 逆FFT
+            result = np.real(ifft(X_suppressed)).astype(np.float32, copy=False)
+
+            return result.reshape(-1, 1)
+        except Exception as e:
+            # エラーが発生した場合は無処理で返す
+            print(f"Post-formant noise suppression error: {e}")
             return indata
     
     def validate_device_pair(self, input_idx, output_idx):
