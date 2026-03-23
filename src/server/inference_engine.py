@@ -124,6 +124,9 @@ class InferenceEngine:
             self.current_model_name = model_name
             self.current_settings = resolved_settings
 
+        # ウォームアップ推論を実行して初回スパイクを軽減
+        self._warmup_inference()
+        
         return LoadModelResultMessage(ok=True, active_model=model_name, device=self.device)
 
     def update_params(self, settings: InferenceSettings) -> UpdateParamsResultMessage:
@@ -315,6 +318,30 @@ class InferenceEngine:
                 }
             )
         return settings
+
+    def _warmup_inference(self):
+        """モデルロード直後にダミー推論を実行して初回スパイクを軽減する。2回実行で安定性向上。"""
+        try:
+            with self._lock, tempfile.TemporaryDirectory(prefix="voicechange_warmup_") as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                input_path = temp_dir_path / "warmup_input.wav"
+                output_path = temp_dir_path / "warmup_output.wav"
+
+                # 短い無音サンプル（0.5秒）を生成
+                sample_rate = 16000
+                warmup_duration_sec = 0.5
+                warmup_audio = np.zeros(int(sample_rate * warmup_duration_sec), dtype=np.float32)
+                
+                sf.write(input_path, warmup_audio, sample_rate)
+                
+                with self._weights_only_compat():
+                    infer = self._ensure_backend()
+                    # バランス型：2回実行で確実なウォームアップ
+                    for warmup_iter in range(2):
+                        infer.infer_file(str(input_path), str(output_path))
+                        logger.info("Warmup inference %d/2 completed for model: %s", warmup_iter + 1, self.current_model_name)
+        except Exception as exc:
+            logger.warning("Warmup inference failed (non-fatal): %s", exc)
 
     def _extract_audio_from_infer_result(self, infer_result: Any, sample_rate: int) -> Tuple[np.ndarray, int]:
         """infer_file がファイルを書かない実装でも推論結果を正規化して取り出す。"""

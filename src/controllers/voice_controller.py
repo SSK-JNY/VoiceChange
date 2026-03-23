@@ -79,7 +79,7 @@ class AudioController:
         preset_name = self.view.tuning_preset_var.get().strip()
         if preset_name == "完全変換":
             preset = {
-                "blocksize": "8192",
+                "blocksize": "24576",
                 "rvc_timeout": "0.40",
                 "fast_rpc_every": "1",
                 "fast_rpc_timeout": "0.30",
@@ -93,7 +93,7 @@ class AudioController:
             }
         else:
             preset = {
-                "blocksize": "1024",
+                "blocksize": "512",
                 "rvc_timeout": "0.18",
                 "fast_rpc_every": "6",
                 "fast_rpc_timeout": "0.08",
